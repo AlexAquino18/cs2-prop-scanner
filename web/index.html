@@ -167,15 +167,20 @@
         $("refresh").textContent = "Refresh lines";
       }
     };
-    load().then(() => {
-      const tick = async () => {
-        const st = await fetch("/api/status").then((r) => r.json());
-        if (!st.has_data || st.running) {
-          $("updated").textContent = st.running ? "Pulling PrizePicks and Underdog…" : "Waiting for first snapshot…";
-          setTimeout(async () => { await load(); tick(); }, 3000);
-        }
-      };
-      tick();
+    load().then(async () => {
+      for (let i = 0; i < 20; i++) {
+        let st = {};
+        try {
+          const res = await fetch("/api/status");
+          if (res.ok) st = await res.json();
+        } catch (e) {}
+        if (st.has_data && !st.running) break;
+        $("updated").textContent = st.running
+          ? "Pulling PrizePicks and Underdog…"
+          : "Waiting for first snapshot…";
+        await new Promise((r) => setTimeout(r, 3000));
+        await load();
+      }
     });
     setInterval(load, 60000);
   </script>

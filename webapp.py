@@ -50,7 +50,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CS2 Prop Scanner", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 
 @app.get("/")
@@ -74,6 +78,9 @@ def api_board(
 @app.post("/api/refresh")
 def api_refresh():
     return ingest.run_ingest()
+
+
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
 if __name__ == "__main__":
