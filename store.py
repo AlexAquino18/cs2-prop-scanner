@@ -48,6 +48,19 @@ def init_db() -> None:
                 ON lines(snapshot_id);
             CREATE INDEX IF NOT EXISTS idx_lines_match
                 ON lines(snapshot_id, player_key, stat_key, map_range, source);
+            CREATE TABLE IF NOT EXISTS openings (
+                player_key TEXT NOT NULL,
+                stat_key TEXT NOT NULL,
+                map_range TEXT NOT NULL,
+                source TEXT NOT NULL,
+                player_raw TEXT NOT NULL,
+                team TEXT,
+                opponent TEXT,
+                line REAL NOT NULL,
+                starts_at TEXT,
+                first_seen_at TEXT NOT NULL,
+                PRIMARY KEY (player_key, stat_key, map_range, source)
+            );
             """
         )
 
@@ -95,6 +108,7 @@ def save_snapshot(props: list[PropLine]) -> int:
             ids = [row["id"] for row in old]
             conn.executemany("DELETE FROM snapshots WHERE id = ?", [(i,) for i in ids])
             conn.executemany("DELETE FROM lines WHERE snapshot_id = ?", [(i,) for i in ids])
+        _sync_openings(conn, props, created_at)
         return snapshot_id
 
 
@@ -128,3 +142,97 @@ def load_lines(snapshot_id: int) -> list[PropLine]:
         )
         for r in rows
     ]
+
+
+def _opening_key(player_key, stat_key, map_range, source) -> tuple:
+    return (player_key, stat_key, map_range or "full", source)
+
+
+def _backfill_openings(conn: sqlite3.Connection) -> None:
+    count = conn.execute("SELECT COUNT(*) AS n FROM openings").fetchone()["n"]
+    if count:
+        return
+    snaps = conn.execute("SELECT id, created_at FROM snapshots ORDER BY id ASC").fetchall()
+    seen = set()
+    for snap in snaps:
+        rows = conn.execute(
+            "SELECT * FROM lines WHERE snapshot_id = ?",
+            (snap["id"],),
+        ).fetchall()
+        for r in rows:
+            key = _opening_key(r["player_key"], r["stat_key"], r["map_range"], r["source"])
+            if key in seen:
+                continue
+            seen.add(key)
+            conn.execute(
+                """
+                INSERT INTO openings (
+                    player_key, stat_key, map_range, source, player_raw,
+                    team, opponent, line, starts_at, first_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    key[0], key[1], key[2], key[3],
+                    r["player_raw"], r["team"], r["opponent"],
+                    r["line"], r["starts_at"], snap["created_at"],
+                ),
+            )
+
+
+def _sync_openings(conn: sqlite3.Connection, props: list[PropLine], seen_at: str) -> None:
+    _backfill_openings(conn)
+    live_by_source: dict[str, set[tuple]] = {}
+    for p in props:
+        key = _opening_key(p.player_key, p.stat_key, p.map_range, p.source)
+        live_by_source.setdefault(p.source, set()).add(key)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO openings (
+                player_key, stat_key, map_range, source, player_raw,
+                team, opponent, line, starts_at, first_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                key[0], key[1], key[2], key[3],
+                p.player_raw, p.team, p.opponent, p.line, p.starts_at, seen_at,
+            ),
+        )
+    existing = conn.execute(
+        "SELECT player_key, stat_key, map_range, source FROM openings"
+    ).fetchall()
+    for row in existing:
+        key = (row["player_key"], row["stat_key"], row["map_range"], row["source"])
+        source = key[3]
+        # A book with zero lines this pull is treated as a fetch miss, not a wipe.
+        live = live_by_source.get(source)
+        if live is None or key in live:
+            continue
+        conn.execute(
+            """
+            DELETE FROM openings
+            WHERE player_key = ? AND stat_key = ? AND map_range = ? AND source = ?
+            """,
+            key,
+        )
+
+
+def load_openings() -> dict[tuple, PropLine]:
+    with _connect() as conn:
+        _backfill_openings(conn)
+        rows = conn.execute("SELECT * FROM openings").fetchall()
+    out = {}
+    for r in rows:
+        key = _opening_key(r["player_key"], r["stat_key"], r["map_range"], r["source"])
+        out[key] = PropLine(
+            source=r["source"],
+            player_raw=r["player_raw"],
+            player_key=r["player_key"],
+            team=r["team"],
+            stat_raw="",
+            stat_key=r["stat_key"],
+            map_range=None if r["map_range"] == "full" else r["map_range"],
+            line=float(r["line"]),
+            opponent=r["opponent"],
+            starts_at=r["starts_at"],
+        )
+    return out

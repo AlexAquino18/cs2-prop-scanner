@@ -75,7 +75,8 @@
     <div class="dates" id="dates"></div>
     <div class="stats" id="stats"></div>
     <div class="banner" id="banner" hidden></div>
-    <h2>Moved the most</h2>
+    <h2>Moved vs opening line</h2>
+    <p class="meta" style="margin:-4px 0 10px">Totals vs the first line we saw. Stays until the prop leaves the board.</p>
     <div id="movers"></div>
     <h2>Top gaps</h2>
     <div id="gaps"></div>
@@ -135,7 +136,7 @@
       $("banner").textContent = data.message || "";
 
       $("movers").innerHTML = table(
-        ["Player", "Team", "Stat", "Matchup", "PrizePicks", "Underdog", "Spread"],
+        ["Player", "Team", "Stat", "Matchup", "PrizePicks", "Underdog", "Spread (open → now)"],
         (data.movers || []).map((m) => [
           m.player, m.team, m.stat, m.matchup || "—",
           cell(m.prizepicks), cell(m.underdog),

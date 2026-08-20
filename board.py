@@ -36,32 +36,22 @@ def fmt_time(starts_at: str | None) -> str:
     return dt.strftime("%I:%M %p").lstrip("0")
 
 
-def line_cell(current: float | None, previous: float | None, had_prev_snapshot: bool) -> dict:
+def line_cell(current: float | None, opening: float | None) -> dict:
     if current is None:
         return {"value": None, "delta": None, "text": "—", "dir": ""}
     text = f"{current:.1f}"
-    if not had_prev_snapshot:
-        return {"value": current, "delta": None, "text": text, "dir": ""}
-    if previous is None:
+    if opening is None:
         return {"value": current, "delta": None, "text": f"{text} new", "dir": "new"}
-    delta = round(current - previous, 1)
+    delta = round(current - opening, 1)
     if abs(delta) < 0.05:
         return {"value": current, "delta": 0, "text": text, "dir": ""}
     sign = "+" if delta > 0 else ""
     return {
         "value": current,
         "delta": delta,
-        "text": f"{text} ({sign}{delta:g})",
+        "text": f"{text} ({sign}{delta:g} from {opening:.1f})",
         "dir": "up" if delta > 0 else "down",
     }
-
-
-def _index_lines(props: list[PropLine]) -> dict:
-    out = {}
-    for prop in props:
-        key = (prop.player_key, prop.stat_key, prop.map_range or "full", prop.source)
-        out.setdefault(key, prop)
-    return out
 
 
 def available_dates(props: list[PropLine]) -> list[str]:
@@ -92,11 +82,8 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
         }
 
     latest_id, latest_at = snaps[0]
-    prev_id = snaps[1][0] if len(snaps) > 1 else None
     latest_props = store.load_lines(latest_id)
-    prev_props = store.load_lines(prev_id) if prev_id else []
-    prev_index = _index_lines(prev_props)
-    had_prev = prev_id is not None
+    openings = store.load_openings()
 
     dates = available_dates(latest_props)
     chosen = date if date in dates else pick_default_date(dates)
@@ -111,18 +98,18 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
         matchup = next((p.opponent for p in disc.lines.values() if p.opponent), "")
         pp = disc.lines.get("prizepicks")
         ud = disc.lines.get("underdog")
-        pp_prev = (
-            prev_index.get((pp.player_key, pp.stat_key, pp.map_range or "full", "prizepicks"))
+        pp_open = (
+            openings.get((pp.player_key, pp.stat_key, pp.map_range or "full", "prizepicks"))
             if pp else None
         )
-        ud_prev = (
-            prev_index.get((ud.player_key, ud.stat_key, ud.map_range or "full", "underdog"))
+        ud_open = (
+            openings.get((ud.player_key, ud.stat_key, ud.map_range or "full", "underdog"))
             if ud else None
         )
-        prev_spread = None
-        if pp_prev and ud_prev:
-            prev_spread = round(abs(pp_prev.line - ud_prev.line), 1)
-        spread_delta = None if prev_spread is None else round(disc.spread - prev_spread, 1)
+        open_spread = None
+        if pp_open and ud_open:
+            open_spread = round(abs(pp_open.line - ud_open.line), 1)
+        spread_delta = None if open_spread is None else round(disc.spread - open_spread, 1)
         gaps.append(
             {
                 "player": disc.player,
@@ -133,8 +120,8 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
                 "start": fmt_time(any_prop.starts_at),
                 "spread": round(disc.spread, 1),
                 "spread_delta": spread_delta,
-                "prizepicks": line_cell(pp.line if pp else None, pp_prev.line if pp_prev else None, had_prev),
-                "underdog": line_cell(ud.line if ud else None, ud_prev.line if ud_prev else None, had_prev),
+                "prizepicks": line_cell(pp.line if pp else None, pp_open.line if pp_open else None),
+                "underdog": line_cell(ud.line if ud else None, ud_open.line if ud_open else None),
             }
         )
 
@@ -149,15 +136,15 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
             continue
         seen.add(key)
         pp, ud = group["prizepicks"], group["underdog"]
-        pp_prev = prev_index.get((*key, "prizepicks"))
-        ud_prev = prev_index.get((*key, "underdog"))
-        pp_delta = None if not pp_prev else round(pp.line - pp_prev.line, 1)
-        ud_delta = None if not ud_prev else round(ud.line - ud_prev.line, 1)
+        pp_open = openings.get((*key, "prizepicks"))
+        ud_open = openings.get((*key, "underdog"))
+        pp_delta = None if not pp_open else round(pp.line - pp_open.line, 1)
+        ud_delta = None if not ud_open else round(ud.line - ud_open.line, 1)
         mag = max(abs(pp_delta or 0), abs(ud_delta or 0))
         if mag < 0.05:
             continue
-        prev_spread = (
-            round(abs(pp_prev.line - ud_prev.line), 1) if pp_prev and ud_prev else None
+        open_spread = (
+            round(abs(pp_open.line - ud_open.line), 1) if pp_open and ud_open else None
         )
         movers.append(
             {
@@ -166,14 +153,14 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
                 "stat": any_prop.stat_key,
                 "matchup": next((p.opponent for p in group.values() if p.opponent), ""),
                 "max_move": mag,
-                "spread_was": prev_spread,
+                "spread_was": open_spread,
                 "spread_now": round(abs(pp.line - ud.line), 1),
-                "prizepicks": line_cell(pp.line, pp_prev.line if pp_prev else None, had_prev),
-                "underdog": line_cell(ud.line, ud_prev.line if ud_prev else None, had_prev),
+                "prizepicks": line_cell(pp.line, pp_open.line if pp_open else None),
+                "underdog": line_cell(ud.line, ud_open.line if ud_open else None),
             }
         )
     movers.sort(key=lambda m: (-m["max_move"], m["player"].lower()))
-    movers = movers[:15]
+    movers = movers[:40]
 
     pp_n = sum(1 for p in day_props if p.source == "prizepicks")
     ud_n = sum(1 for p in day_props if p.source == "underdog")
