@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CS2 Prop Scanner</title>
+  <style>
+    :root {
+      --bg: #0e1116;
+      --panel: #161b22;
+      --line: #2a313c;
+      --text: #e6edf3;
+      --muted: #8b98a5;
+      --accent: #6cb6ff;
+      --up: #3fb950;
+      --down: #f85149;
+      --warn: #d29922;
+      --new: #a371f7;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+    header {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+      justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--line);
+    }
+    h1 { font-size: 18px; margin: 0; font-weight: 650; }
+    .meta { color: var(--muted); font-size: 12px; }
+    main { padding: 18px 22px 40px; max-width: 1280px; margin: 0 auto; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+    button, select {
+      background: var(--panel); color: var(--text); border: 1px solid var(--line);
+      border-radius: 8px; padding: 8px 12px; cursor: pointer;
+    }
+    button.primary { background: #1f6feb; border-color: #1f6feb; }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    .dates { display: flex; flex-wrap: wrap; gap: 6px; }
+    .dates button.active { background: #1f6feb; border-color: #1f6feb; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 8px 0 22px; }
+    .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+    .stat b { display: block; font-size: 22px; font-weight: 650; }
+    .stat span { color: var(--muted); font-size: 12px; }
+    h2 { font-size: 15px; margin: 22px 0 10px; font-weight: 650; }
+    .empty { color: var(--muted); padding: 20px 0; }
+    .banner { background: #1c2128; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; color: var(--muted); margin-bottom: 16px; }
+    .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; min-width: 780px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { color: var(--muted); font-size: 12px; font-weight: 600; background: #12171e; position: sticky; top: 0; }
+    tr:nth-child(even) td { background: #12171e; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .up { color: var(--up); }
+    .down { color: var(--down); }
+    .new { color: var(--new); }
+    .spread { font-weight: 650; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>CS2 Prop Scanner</h1>
+      <div class="meta" id="updated">Loading…</div>
+    </div>
+    <div class="row" style="margin:0">
+      <label class="meta">Min spread
+        <select id="threshold">
+          <option value="0.5" selected>0.5</option>
+          <option value="1">1.0</option>
+          <option value="1.5">1.5</option>
+        </select>
+      </label>
+      <button class="primary" id="refresh">Refresh lines</button>
+    </div>
+  </header>
+  <main>
+    <div class="dates" id="dates"></div>
+    <div class="stats" id="stats"></div>
+    <div class="banner" id="banner" hidden></div>
+    <h2>Moved the most</h2>
+    <div id="movers"></div>
+    <h2>Top gaps</h2>
+    <div id="gaps"></div>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let currentDate = new URLSearchParams(location.search).get("date");
+
+    function cell(obj) {
+      if (!obj) return "—";
+      const cls = obj.dir || "";
+      return `<span class="${cls}">${obj.text}</span>`;
+    }
+
+    function table(headers, rows, aligns) {
+      if (!rows.length) return `<div class="empty">Nothing here yet.</div>`;
+      const th = headers.map((h, i) => `<th class="${aligns[i] || ""}">${h}</th>`).join("");
+      const body = rows.map((r) => {
+        const tds = r.map((c, i) => `<td class="${aligns[i] || ""}">${c}</td>`).join("");
+        return `<tr>${tds}</tr>`;
+      }).join("");
+      return `<div class="wrap"><table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    function fmtWhen(iso) {
+      if (!iso) return "No snapshot yet";
+      const d = new Date(iso);
+      return "Updated " + d.toLocaleString();
+    }
+
+    async function load() {
+      const threshold = $("threshold").value;
+      const qs = new URLSearchParams({ threshold });
+      if (currentDate) qs.set("date", currentDate);
+      const res = await fetch("/api/board?" + qs.toString());
+      const data = await res.json();
+      currentDate = data.date || currentDate;
+      $("updated").textContent = fmtWhen(data.snapshot_at);
+      $("dates").innerHTML = (data.dates || []).map((d) => {
+        const active = d === data.date ? "active" : "";
+        return `<button class="${active}" data-date="${d}">${d.slice(5)}</button>`;
+      }).join("");
+      $("dates").querySelectorAll("button").forEach((b) => {
+        b.onclick = () => { currentDate = b.dataset.date; load(); };
+      });
+      const s = data.stats || {};
+      $("stats").innerHTML = [
+        ["Gaps", s.gaps ?? 0],
+        ["Movers", s.movers ?? 0],
+        ["Gaps closed", s.closed ?? 0],
+        ["PrizePicks", s.prizepicks ?? 0],
+        ["Underdog", s.underdog ?? 0],
+        ["Max spread", s.max_spread ?? 0],
+      ].map(([label, val]) => `<div class="stat"><b>${val}</b><span>${label}</span></div>`).join("");
+
+      $("banner").hidden = !data.message;
+      $("banner").textContent = data.message || "";
+
+      $("movers").innerHTML = table(
+        ["Player", "Team", "Stat", "Matchup", "PrizePicks", "Underdog", "Spread"],
+        (data.movers || []).map((m) => [
+          m.player, m.team, m.stat, m.matchup || "—",
+          cell(m.prizepicks), cell(m.underdog),
+          `${m.spread_was ?? "—"} → ${m.spread_now}`,
+        ]),
+        ["", "", "", "", "num", "num", "num"]
+      );
+
+      $("gaps").innerHTML = table(
+        ["#", "Player", "Team", "Stat", "Matchup", "Start", "Spread", "PrizePicks", "Underdog"],
+        (data.gaps || []).map((g, i) => [
+          i + 1, g.player, g.team, g.stat, g.matchup || "—", g.start,
+          `<span class="spread">${g.spread.toFixed(1)}</span>`,
+          cell(g.prizepicks), cell(g.underdog),
+        ]),
+        ["num", "", "", "", "", "", "num", "num", "num"]
+      );
+    }
+
+    $("threshold").onchange = load;
+    $("refresh").onclick = async () => {
+      $("refresh").disabled = true;
+      $("refresh").textContent = "Pulling books…";
+      try {
+        await fetch("/api/refresh", { method: "POST" });
+        await load();
+      } finally {
+        $("refresh").disabled = false;
+        $("refresh").textContent = "Refresh lines";
+      }
+    };
+    load().then(() => {
+      const tick = async () => {
+        const st = await fetch("/api/status").then((r) => r.json());
+        if (!st.has_data || st.running) {
+          $("updated").textContent = st.running ? "Pulling PrizePicks and Underdog…" : "Waiting for first snapshot…";
+          setTimeout(async () => { await load(); tick(); }, 3000);
+        }
+      };
+      tick();
+    });
+    setInterval(load, 60000);
+  </script>
+</body>
+</html>

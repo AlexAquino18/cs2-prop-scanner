@@ -1,0 +1,85 @@
+"""Local CS2 prop dashboard. Run: python webapp.py"""
+from __future__ import annotations
+
+import threading
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+import board
+import ingest
+import store
+
+WEB_DIR = Path(__file__).resolve().parent / "web"
+REFRESH_MINUTES = 15
+
+
+def _safe_ingest() -> None:
+    try:
+        ingest.run_ingest()
+    except Exception:
+        pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    store.init_db()
+    scheduler = None
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(
+            _safe_ingest,
+            "interval",
+            minutes=REFRESH_MINUTES,
+            id="ingest",
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.start()
+    except Exception:
+        scheduler = None
+    threading.Thread(target=_safe_ingest, daemon=True).start()
+    yield
+    if scheduler:
+        scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="CS2 Prop Scanner", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+
+
+@app.get("/")
+def index():
+    return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/api/status")
+def api_status():
+    return ingest.status()
+
+
+@app.get("/api/board")
+def api_board(
+    date: str | None = Query(default=None),
+    threshold: float = Query(default=0.5),
+):
+    return board.build_dashboard(date=date, threshold=threshold)
+
+
+@app.post("/api/refresh")
+def api_refresh():
+    return ingest.run_ingest()
+
+
+if __name__ == "__main__":
+    import os
+    import uvicorn
+
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("webapp:app", host=host, port=port, reload=False)

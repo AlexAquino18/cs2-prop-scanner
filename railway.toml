@@ -1,0 +1,8 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "python webapp.py"
+restartPolicyType = "ON_FAILURE"
+healthcheckPath = "/api/status"
+healthcheckTimeout = 30
