@@ -3,7 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CS2 Prop Scanner</title>
+  <title>CS2 Prop Scanner — PrizePicks vs Underdog</title>
+  <meta name="description" content="Live CS2 player prop discrepancies between PrizePicks and Underdog, grouped by match, with Polymarket series-winner odds." />
+  <link rel="canonical" href="{{SITE_URL}}/" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="CS2 Prop Scanner — PrizePicks vs Underdog" />
+  <meta property="og:description" content="See where CS2 player props disagree across books, plus who Polymarket has winning the series." />
+  <meta property="og:url" content="{{SITE_URL}}/" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="CS2 Prop Scanner" />
+  <meta name="twitter:description" content="PrizePicks vs Underdog CS2 props, with Polymarket series odds." />
+  <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"WebApplication","name":"CS2 Prop Scanner","url":"{{SITE_URL}}/","description":"Live CS2 player prop discrepancies between PrizePicks and Underdog, with Polymarket series-winner odds.","applicationCategory":"SportsApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+  </script>
   <style>
     :root {
       --bg: #0e1116;
@@ -20,30 +33,33 @@
     * { box-sizing: border-box; }
     html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
     header {
-      display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
       justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--line);
     }
-    h1 { font-size: 18px; margin: 0; font-weight: 650; }
+    h1 { font-size: 20px; margin: 0; font-weight: 650; }
+    .lede { color: var(--muted); font-size: 13px; margin: 4px 0 0; max-width: 520px; }
     .meta { color: var(--muted); font-size: 12px; }
-    main { padding: 18px 22px 40px; max-width: 1280px; margin: 0 auto; }
+    main { padding: 18px 22px 24px; max-width: 1100px; margin: 0 auto; }
     .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
-    button, select {
+    button, select, input[type="search"] {
       background: var(--panel); color: var(--text); border: 1px solid var(--line);
-      border-radius: 8px; padding: 8px 12px; cursor: pointer;
+      border-radius: 8px; padding: 8px 12px;
     }
+    input[type="search"] { min-width: 180px; }
+    button { cursor: pointer; }
     button.primary { background: #1f6feb; border-color: #1f6feb; }
     button:disabled { opacity: 0.55; cursor: wait; }
     .dates { display: flex; flex-wrap: wrap; gap: 6px; }
     .dates button.active { background: #1f6feb; border-color: #1f6feb; }
-    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 8px 0 22px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 8px 0 18px; }
     .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
     .stat b { display: block; font-size: 22px; font-weight: 650; }
     .stat span { color: var(--muted); font-size: 12px; }
-    h2 { font-size: 15px; margin: 22px 0 10px; font-weight: 650; }
-    .empty { color: var(--muted); padding: 20px 0; }
+    h2 { font-size: 15px; margin: 22px 0 8px; font-weight: 650; }
+    .empty { color: var(--muted); padding: 16px 0; }
     .banner { background: #1c2128; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; color: var(--muted); margin-bottom: 16px; }
     .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
-    table { width: 100%; border-collapse: collapse; min-width: 780px; }
+    table { width: 100%; border-collapse: collapse; min-width: 640px; }
     th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
     th { color: var(--muted); font-size: 12px; font-weight: 600; background: #12171e; position: sticky; top: 0; }
     tr:nth-child(even) td { background: #12171e; }
@@ -52,15 +68,35 @@
     .down { color: var(--down); }
     .new { color: var(--new); }
     .spread { font-weight: 650; }
+    .match { margin: 0 0 22px; }
+    .match-head {
+      display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+      justify-content: space-between; padding: 10px 12px;
+      background: var(--panel); border: 1px solid var(--line); border-bottom: 0;
+      border-radius: 10px 10px 0 0;
+    }
+    .match-head h3 { margin: 0; font-size: 15px; font-weight: 650; }
+    .match .wrap { border-radius: 0 0 10px 10px; }
+    .odds { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-variant-numeric: tabular-nums; }
+    .odds a { color: var(--accent); text-decoration: none; font-size: 12px; }
+    .pill {
+      background: #12171e; border: 1px solid var(--line); border-radius: 999px;
+      padding: 4px 10px; font-size: 13px;
+    }
+    .pill.fav { border-color: #238636; color: var(--up); }
+    footer { color: var(--muted); font-size: 12px; padding: 8px 22px 28px; max-width: 1100px; margin: 0 auto; }
+    footer a { color: var(--accent); }
   </style>
 </head>
 <body>
   <header>
     <div>
       <h1>CS2 Prop Scanner</h1>
+      <p class="lede">Where PrizePicks and Underdog disagree on CS2 player props. Series-winner odds from Polymarket sit on the match, not on every row.</p>
       <div class="meta" id="updated">Loading…</div>
     </div>
     <div class="row" style="margin:0">
+      <input type="search" id="q" placeholder="Search player or team" />
       <label class="meta">Min spread
         <select id="threshold">
           <option value="0.5" selected>0.5</option>
@@ -76,19 +112,32 @@
     <div class="stats" id="stats"></div>
     <div class="banner" id="banner" hidden></div>
     <h2>Moved vs opening line</h2>
-    <p class="meta" style="margin:-4px 0 10px">Totals vs the first line we saw. Stays until the prop leaves the board.</p>
+    <p class="meta" style="margin:-2px 0 10px">Vs the first line we saw. Stays until the prop leaves the board.</p>
     <div id="movers"></div>
-    <h2>Top gaps</h2>
-    <div id="gaps"></div>
+    <h2>Gaps by match</h2>
+    <p class="meta" style="margin:-2px 0 12px">Same player, same stat, different books. Percentages are Polymarket series winner.</p>
+    <div id="matches"></div>
   </main>
+  <footer>
+    Free tool for CS2 pick’em. Not gambling advice — lines move, odds can be stale, and a gap is not a lock.
+    Data from PrizePicks, Underdog, and <a href="https://polymarket.com/esports/cs2" target="_blank" rel="noopener">Polymarket</a>. 18+.
+  </footer>
   <script>
     const $ = (id) => document.getElementById(id);
-    let currentDate = new URLSearchParams(location.search).get("date");
+    const params = new URLSearchParams(location.search);
+    let currentDate = params.get("date");
+    let boardData = null;
+    if (params.get("threshold")) $("threshold").value = params.get("threshold");
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
 
     function cell(obj) {
       if (!obj) return "—";
-      const cls = obj.dir || "";
-      return `<span class="${cls}">${obj.text}</span>`;
+      return `<span class="${obj.dir || ""}">${esc(obj.text)}</span>`;
     }
 
     function table(headers, rows, aligns) {
@@ -103,17 +152,43 @@
 
     function fmtWhen(iso) {
       if (!iso) return "No snapshot yet";
-      const d = new Date(iso);
-      return "Updated " + d.toLocaleString();
+      return "Updated " + new Date(iso).toLocaleString();
     }
 
-    async function load() {
-      const threshold = $("threshold").value;
-      const qs = new URLSearchParams({ threshold });
-      if (currentDate) qs.set("date", currentDate);
-      const res = await fetch("/api/board?" + qs.toString());
-      const data = await res.json();
-      currentDate = data.date || currentDate;
+    function oddsPills(series) {
+      if (!series) return `<span class="meta">No series market</span>`;
+      const aFav = series.a.pct >= series.b.pct;
+      const pills = [series.a, series.b].map((side, i) => {
+        const fav = (i === 0) === aFav;
+        return `<span class="pill ${fav ? "fav" : ""}">${esc(side.name)} ${side.pct}%</span>`;
+      }).join("");
+      const link = series.url
+        ? `<a href="${esc(series.url)}" target="_blank" rel="noopener">Polymarket</a>`
+        : "";
+      return `<div class="odds">${pills}${link}</div>`;
+    }
+
+    function query() {
+      return ($("q").value || "").trim().toLowerCase();
+    }
+
+    function matchesQuery(text) {
+      const q = query();
+      return !q || (text || "").toLowerCase().includes(q);
+    }
+
+    function gapRow(g) {
+      return [
+        esc(g.player), esc(g.team), esc(g.stat),
+        `<span class="spread">${g.spread.toFixed(1)}</span>`,
+        cell(g.prizepicks), cell(g.underdog),
+      ];
+    }
+
+    function render() {
+      const data = boardData;
+      if (!data) return;
+      const q = query();
       $("updated").textContent = fmtWhen(data.snapshot_at);
       $("dates").innerHTML = (data.dates || []).map((d) => {
         const active = d === data.date ? "active" : "";
@@ -125,38 +200,71 @@
       const s = data.stats || {};
       $("stats").innerHTML = [
         ["Gaps", s.gaps ?? 0],
+        ["Matches", s.matches ?? 0],
+        ["Series odds", s.series ?? 0],
         ["Movers", s.movers ?? 0],
-        ["Gaps closed", s.closed ?? 0],
         ["PrizePicks", s.prizepicks ?? 0],
         ["Underdog", s.underdog ?? 0],
-        ["Max spread", s.max_spread ?? 0],
       ].map(([label, val]) => `<div class="stat"><b>${val}</b><span>${label}</span></div>`).join("");
 
       $("banner").hidden = !data.message;
       $("banner").textContent = data.message || "";
 
+      const movers = (data.movers || []).filter((m) =>
+        matchesQuery([m.player, m.team, m.stat, m.matchup].join(" "))
+      );
       $("movers").innerHTML = table(
-        ["Player", "Team", "Stat", "Matchup", "PrizePicks", "Underdog", "Spread (open → now)"],
-        (data.movers || []).map((m) => [
-          m.player, m.team, m.stat, m.matchup || "—",
+        ["Player", "Team", "Stat", "Matchup", "PrizePicks", "Underdog", "Open → now"],
+        movers.map((m) => [
+          esc(m.player), esc(m.team), esc(m.stat), esc(m.matchup || "—"),
           cell(m.prizepicks), cell(m.underdog),
           `${m.spread_was ?? "—"} → ${m.spread_now}`,
         ]),
         ["", "", "", "", "num", "num", "num"]
       );
 
-      $("gaps").innerHTML = table(
-        ["#", "Player", "Team", "Stat", "Matchup", "Start", "Spread", "PrizePicks", "Underdog"],
-        (data.gaps || []).map((g, i) => [
-          i + 1, g.player, g.team, g.stat, g.matchup || "—", g.start,
-          `<span class="spread">${g.spread.toFixed(1)}</span>`,
-          cell(g.prizepicks), cell(g.underdog),
-        ]),
-        ["num", "", "", "", "", "", "num", "num", "num"]
-      );
+      const matches = (data.matches || []).map((m) => ({
+        ...m,
+        gaps: (m.gaps || []).filter((g) =>
+          matchesQuery([m.label, g.player, g.team, g.stat].join(" "))
+        ),
+      })).filter((m) => m.gaps.length);
+      if (!matches.length) {
+        $("matches").innerHTML = `<div class="empty">${q ? "No matches for that search." : "No gaps for this date."}</div>`;
+        return;
+      }
+      $("matches").innerHTML = matches.map((m) => `
+        <section class="match">
+          <div class="match-head">
+            <div>
+              <h3>${esc(m.label)}</h3>
+              <div class="meta">${esc(m.start || "")}</div>
+            </div>
+            ${oddsPills(m.series)}
+          </div>
+          ${table(
+            ["Player", "Team", "Stat", "Spread", "PrizePicks", "Underdog"],
+            m.gaps.map(gapRow),
+            ["", "", "", "num", "num", "num"]
+          )}
+        </section>
+      `).join("");
+    }
+
+    async function load() {
+      const threshold = $("threshold").value;
+      const qs = new URLSearchParams({ threshold });
+      if (currentDate) qs.set("date", currentDate);
+      const next = "?" + qs.toString();
+      if (location.search !== next) history.replaceState(null, "", next);
+      const res = await fetch("/api/board?" + qs.toString());
+      boardData = await res.json();
+      currentDate = boardData.date || currentDate;
+      render();
     }
 
     $("threshold").onchange = load;
+    $("q").oninput = render;
     $("refresh").onclick = async () => {
       $("refresh").disabled = true;
       $("refresh").textContent = "Pulling books…";
@@ -177,7 +285,7 @@
         } catch (e) {}
         if (st.has_data && !st.running) break;
         $("updated").textContent = st.running
-          ? "Pulling PrizePicks and Underdog…"
+          ? "Pulling PrizePicks, Underdog, and Polymarket…"
           : "Waiting for first snapshot…";
         await new Promise((r) => setTimeout(r, 3000));
         await load();

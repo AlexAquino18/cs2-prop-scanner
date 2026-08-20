@@ -32,3 +32,15 @@ DEFAULT_LINE_DIFF_THRESHOLD = 0.5
 PLAYER_NAME_FUZZY_CUTOFF = 0.82
 
 REQUEST_TIMEOUT_SECONDS = 20
+
+# --- Polymarket ---
+# Public Gamma API. series 10310 = CS2 match events.
+POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com"
+POLYMARKET_CS2_SERIES_ID = int(os.environ.get("POLYMARKET_CS2_SERIES_ID", "10310"))
+POLYMARKET_CACHE_SECONDS = int(os.environ.get("POLYMARKET_CACHE_SECONDS", "120"))
+
+# Canonical public URL for SEO / sitemap. Override if you add a custom domain.
+PUBLIC_SITE_URL = os.environ.get(
+    "PUBLIC_SITE_URL",
+    "https://cs2-prop-scanner.onrender.com",
+).rstrip("/")

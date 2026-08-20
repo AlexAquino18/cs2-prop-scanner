@@ -6,10 +6,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import board
+import config
 import ingest
 import store
 
@@ -49,7 +50,11 @@ async def lifespan(app: FastAPI):
         scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="CS2 Prop Scanner", lifespan=lifespan)
+app = FastAPI(
+    title="CS2 Prop Scanner",
+    description="PrizePicks vs Underdog CS2 player props, with Polymarket series odds.",
+    lifespan=lifespan,
+)
 
 
 @app.get("/healthz")
@@ -59,7 +64,35 @@ def healthz():
 
 @app.get("/")
 def index():
-    return FileResponse(WEB_DIR / "index.html")
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(html.replace("{{SITE_URL}}", config.PUBLIC_SITE_URL))
+
+
+@app.get("/favicon.svg")
+def favicon():
+    return FileResponse(WEB_DIR / "favicon.svg", media_type="image/svg+xml")
+
+
+@app.get("/robots.txt")
+def robots():
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        f"Sitemap: {config.PUBLIC_SITE_URL}/sitemap.xml\n"
+    )
+    return Response(body, media_type="text/plain")
+
+
+@app.get("/sitemap.xml")
+def sitemap():
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"  <url><loc>{config.PUBLIC_SITE_URL}/</loc>"
+        "<changefreq>hourly</changefreq><priority>1.0</priority></url>\n"
+        "</urlset>\n"
+    )
+    return Response(body, media_type="application/xml")
 
 
 @app.get("/api/status")

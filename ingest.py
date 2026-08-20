@@ -53,6 +53,12 @@ def run_ingest() -> dict:
             counts[name] = len(batch)
             props.extend(batch)
         snapshot_id = store.save_snapshot(props)
+        try:
+            from sources import polymarket
+
+            counts["polymarket"] = len(polymarket.get_series_odds(session))
+        except Exception as exc:
+            counts["polymarket"] = f"error: {exc}"
         _STATE["last_snapshot_id"] = snapshot_id
         _STATE["last_counts"] = counts
         _STATE["running"] = False

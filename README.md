@@ -37,7 +37,9 @@ pip install -r requirements.txt
 python webapp.py
 ```
 
-Open http://127.0.0.1:8000 — it pulls PrizePicks and Underdog on startup, then every 15 minutes. Use **Refresh lines** to pull immediately. Line moves compare the latest snapshot to the previous one.
+Open http://127.0.0.1:8000 — it pulls PrizePicks and Underdog on startup, then every 15 minutes. Use **Refresh lines** to pull immediately. Line moves are vs each prop's opening line. Matches show Polymarket series-winner odds when a market exists.
+
+Live site: https://cs2-prop-scanner.onrender.com/
 
 ## Host it (Render)
 

@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 import matching
 import store
 from models import PropLine
+from sources import polymarket
+from teams import matchup_keys, split_matchup, team_key
 
 ET = ZoneInfo("America/New_York")
 
@@ -67,7 +69,42 @@ def pick_default_date(dates: list[str]) -> str | None:
     return upcoming[0] if upcoming else dates[-1]
 
 
-def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int = 50) -> dict:
+def _series_payload(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    return {
+        "label": row["label"],
+        "a": row["a"],
+        "b": row["b"],
+        "url": row["url"],
+    }
+
+
+def _group_key(matchup: str, team: str, starts_at: str | None) -> tuple:
+    sides = [team_key(part) for part in split_matchup(matchup)]
+    sides = [key for key in sides if key]
+    if len(sides) >= 2:
+        a, b = sorted(sides[:2])
+        return ("pair", a, b)
+    if sides:
+        hour = (parse_dt(starts_at) or datetime.now(ET)).strftime("%Y-%m-%d %H")
+        return ("team", sides[0], hour)
+    tk = team_key(team)
+    if tk:
+        hour = (parse_dt(starts_at) or datetime.now(ET)).strftime("%Y-%m-%d %H")
+        return ("team", tk, hour)
+    return ("other", matchup or team or "unknown", str(et_date(starts_at) or ""))
+
+
+def _match_label(matchup: str, team: str, series: dict | None) -> str:
+    if series and series.get("label"):
+        return series["label"]
+    if matchup:
+        return matchup
+    return team or "Other"
+
+
+def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int = 80) -> dict:
     store.init_db()
     snaps = store.latest_snapshot_ids(2)
     if not snaps:
@@ -78,6 +115,7 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
             "date": date,
             "gaps": [],
             "movers": [],
+            "matches": [],
             "stats": {},
         }
 
@@ -91,6 +129,10 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
 
     groups = matching.group_props(day_props)
     discrepancies = matching.find_discrepancies(groups, threshold=threshold)
+    try:
+        series_odds = polymarket.get_series_odds()
+    except Exception:
+        series_odds = []
 
     gaps = []
     for disc in discrepancies[:limit]:
@@ -110,16 +152,21 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
         if pp_open and ud_open:
             open_spread = round(abs(pp_open.line - ud_open.line), 1)
         spread_delta = None if open_spread is None else round(disc.spread - open_spread, 1)
+        team = disc.team or ""
+        series = _series_payload(polymarket.match_series(matchup_keys(matchup, team), series_odds))
         gaps.append(
             {
                 "player": disc.player,
-                "team": disc.team or "",
+                "team": team,
                 "stat": disc.stat,
                 "map": disc.map_range or "full",
                 "matchup": matchup,
                 "start": fmt_time(any_prop.starts_at),
+                "starts_at": any_prop.starts_at,
                 "spread": round(disc.spread, 1),
                 "spread_delta": spread_delta,
+                "group": _group_key(matchup, team, any_prop.starts_at),
+                "series": series,
                 "prizepicks": line_cell(pp.line if pp else None, pp_open.line if pp_open else None),
                 "underdog": line_cell(ud.line if ud else None, ud_open.line if ud_open else None),
             }
@@ -162,6 +209,41 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
     movers.sort(key=lambda m: (-m["max_move"], m["player"].lower()))
     movers = movers[:40]
 
+    buckets: dict[tuple, dict] = {}
+    for gap in gaps:
+        bucket = buckets.setdefault(
+            gap["group"],
+            {
+                "label": "",
+                "start": gap["start"],
+                "starts_at": gap["starts_at"],
+                "series": gap["series"],
+                "max_spread": 0,
+                "gaps": [],
+            },
+        )
+        bucket["gaps"].append(gap)
+        bucket["max_spread"] = max(bucket["max_spread"], gap["spread"])
+        if gap["series"] and not bucket["series"]:
+            bucket["series"] = gap["series"]
+        if gap["starts_at"] and (
+            not bucket["starts_at"] or gap["starts_at"] < bucket["starts_at"]
+        ):
+            bucket["start"] = gap["start"]
+            bucket["starts_at"] = gap["starts_at"]
+    matches = []
+    for key, bucket in buckets.items():
+        sample = bucket["gaps"][0]
+        bucket["label"] = _match_label(sample["matchup"], sample["team"], bucket["series"])
+        for gap in bucket["gaps"]:
+            gap.pop("group", None)
+            gap.pop("starts_at", None)
+            gap.pop("series", None)
+        matches.append(bucket)
+    matches.sort(key=lambda m: (m.get("starts_at") or "9999", -(m["max_spread"] or 0)))
+    for match in matches:
+        match.pop("starts_at", None)
+
     pp_n = sum(1 for p in day_props if p.source == "prizepicks")
     ud_n = sum(1 for p in day_props if p.source == "underdog")
     closed = sum(
@@ -182,7 +264,10 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
             "prizepicks": pp_n,
             "underdog": ud_n,
             "max_spread": gaps[0]["spread"] if gaps else 0,
+            "matches": len(matches),
+            "series": sum(1 for m in matches if m.get("series")),
         },
         "gaps": gaps,
         "movers": movers,
+        "matches": matches,
     }
