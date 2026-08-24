@@ -238,7 +238,8 @@ def counts() -> dict:
 
 
 def _seed_counts(path: Path) -> dict:
-    with sqlite3.connect(path) as conn:
+    uri = path.resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(uri, uri=True) as conn:
         def n(table: str) -> int:
             try:
                 return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
@@ -279,7 +280,7 @@ def load_seed_if_needed() -> None:
         and live["players"] >= seed["players"]
     ):
         return
-    with sqlite3.connect(SEED_PATH) as src, _connect() as dest:
+    with sqlite3.connect(SEED_PATH.resolve().as_uri() + "?mode=ro", uri=True) as src, _connect() as dest:
         for table in SEED_TABLES:
             if table == "bdl_meta":
                 _copy_table(
@@ -314,12 +315,17 @@ def write_seed() -> Path:
             """
         )
         conn.commit()
+        conn.execute("VACUUM")
+        conn.commit()
     finally:
         conn.close()
-    SEED_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if SEED_PATH.exists():
-        SEED_PATH.unlink()
-    shutil.copyfile(tmp, SEED_PATH)
+    try:
+        shutil.copyfile(tmp, SEED_PATH)
+    except PermissionError:
+        backup = SEED_PATH.with_name("bdl_stats.next.db")
+        shutil.copyfile(tmp, backup)
+        SEED_PATH.unlink(missing_ok=True)
+        backup.replace(SEED_PATH)
     tmp.unlink(missing_ok=True)
     for suffix in ("-wal", "-shm"):
         extra = Path(str(tmp) + suffix)

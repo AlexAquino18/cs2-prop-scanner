@@ -161,41 +161,43 @@
     .l10-head strong { font-size: 13px; }
     .l10-rates { display: flex; gap: 12px; color: var(--muted); font-size: 12px; }
     .l10-rates b { color: var(--text); font-variant-numeric: tabular-nums; }
-    .l10-plot {
-      position: relative; display: flex; align-items: stretch; gap: 4px;
-      height: 132px; padding: 18px 2px 0;
+    .l10-nums, .l10-plot, .l10-axis {
+      display: flex; gap: 6px; justify-content: center; align-items: flex-end;
     }
-    .l10-guide {
-      position: absolute; left: 0; right: 0; border-top: 1px dashed #6e7b8a;
-      pointer-events: none; z-index: 1;
+    .l10-nums { margin-bottom: 4px; }
+    .l10-nums span, .l10-col, .l10-axis span {
+      flex: 1 1 0; max-width: 42px; min-width: 0; text-align: center;
     }
-    .l10-guide span {
-      position: absolute; right: 0; top: -15px; font-size: 10px; color: var(--muted);
-      background: var(--panel); padding: 0 4px;
-    }
-    .l10-col {
-      flex: 1; min-width: 0; display: flex; flex-direction: column;
-      align-items: center; justify-content: flex-end; position: relative; z-index: 2;
-      min-height: 0;
-    }
-    .l10-n { font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; margin-bottom: 4px; }
+    .l10-n { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
     .l10-n.over, .val.over { color: var(--up); }
     .l10-n.under, .val.under { color: var(--down); }
     .l10-n.push { color: var(--warn); }
-    .l10-track {
-      flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center;
-      min-height: 0;
+    .l10-plot {
+      position: relative; height: 112px; align-items: stretch;
+      border-bottom: 1px solid var(--line);
+    }
+    .l10-guide {
+      position: absolute; left: 0; right: 0; border-top: 1px dashed #9aa7b5;
+      pointer-events: none; z-index: 1;
+    }
+    .l10-guide span {
+      position: absolute; right: 0; top: -14px; font-size: 10px; color: var(--muted);
+      background: var(--panel); padding: 0 4px;
+    }
+    .l10-col {
+      display: flex; align-items: flex-end; justify-content: center;
+      height: 100%; position: relative; z-index: 2;
     }
     .l10-bar {
-      display: block; width: 100%; max-width: 28px; min-height: 4px; border-radius: 4px 4px 0 0;
+      display: block; width: 16px; min-height: 3px; border-radius: 3px 3px 0 0;
       background: #3d4a5c;
     }
     .l10-bar.over { background: var(--up); }
     .l10-bar.under { background: var(--down); }
     .l10-bar.push { background: var(--warn); }
-    .l10-axis { display: flex; gap: 4px; margin-top: 6px; }
+    .l10-axis { margin-top: 6px; }
     .l10-axis span {
-      flex: 1; min-width: 0; text-align: center; font-size: 9px; color: var(--muted);
+      font-size: 9px; color: var(--muted);
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .log { width: 100%; min-width: 460px; font-size: 12px; }
@@ -448,20 +450,28 @@
       return `<span>${esc(label)} <b>${block.overs}/${block.n}</b> (${block.pct}%)</span>`;
     }
 
+    function fmtStat(v) {
+      if (v == null || v === "") return "—";
+      const n = Number(v);
+      if (!Number.isFinite(n)) return String(v);
+      if (Math.abs(n - Math.round(n)) < 0.05) return String(Math.round(n));
+      return String(Math.round(n * 10) / 10);
+    }
+
     function l10Chart(p) {
       const rows = (p.recent || []).slice().reverse();
       if (!rows.length) return "";
       const line = p.line != null ? Number(p.line) : null;
-      const maxVal = Math.max(...rows.map((r) => Number(r.value) || 0), line || 0, 1) * 1.15;
+      const top = Math.max(...rows.map((r) => Number(r.value) || 0), line || 0, 1);
+      const pct = (v) => Math.max(3, Math.min(100, (Number(v) / top) * 100));
+      const nums = rows.map((r) => `<span class="l10-n ${r.vs || ""}">${esc(fmtStat(r.value))}</span>`).join("");
       const guide = line != null
-        ? `<div class="l10-guide" style="bottom:${Math.max(4, Math.min(96, (line / maxVal) * 100))}%"><span>${esc(line)}</span></div>`
+        ? `<div class="l10-guide" style="bottom:${pct(line)}%"><span>${esc(fmtStat(line))}</span></div>`
         : "";
       const cols = rows.map((r) => {
-        const h = Math.max(6, Math.min(100, ((Number(r.value) || 0) / maxVal) * 100));
         const cls = r.vs || "";
-        return `<div class="l10-col" title="${esc(fmtDay(r.start))} vs ${esc(r.opponent || "—")} · ${esc(r.value)}">
-          <span class="l10-n ${cls}">${esc(r.value)}</span>
-          <div class="l10-track"><i class="l10-bar ${cls}" style="height:${h}%"></i></div>
+        return `<div class="l10-col" title="${esc(fmtDay(r.start))} vs ${esc(r.opponent || "—")} · ${esc(fmtStat(r.value))}">
+          <i class="l10-bar ${cls}" style="height:${pct(r.value)}%"></i>
         </div>`;
       }).join("");
       const axis = rows.map((r) => `<span title="${esc(r.opponent || "")}">${esc(r.opp || r.opponent || "—")}</span>`).join("");
@@ -471,6 +481,7 @@
           <strong>Last ${rows.length} games</strong>
           <div class="l10-rates">${rates}</div>
         </div>
+        <div class="l10-nums">${nums}</div>
         <div class="l10-plot">${guide}${cols}</div>
         <div class="l10-axis">${axis}</div>
       </div>`;
@@ -488,7 +499,7 @@
           <td>${esc(fmtDay(r.start))}</td>
           <td class="opp" title="${esc(r.opponent || "")}">${esc(r.opponent || "—")}</td>
           <td>${esc(r.maps || "")}</td>
-          <td class="num val ${r.vs || ""}">${esc(r.value)}</td>
+          <td class="num val ${r.vs || ""}">${esc(fmtStat(r.value))}</td>
           <td class="num">${esc(kd)}</td>
           <td class="num">${esc(adr)}</td>
           <td class="num">${esc(hs)}</td>
@@ -520,8 +531,8 @@
         : "";
       const kpis = (p.avg != null || p.line != null)
         ? `<div class="kpis">
-            <div class="kpi"><b>${p.avg != null ? esc(p.avg) : "—"}</b><span>Avg last ${Math.min(10, (p.recent || []).length) || 10}</span></div>
-            <div class="kpi"><b>${p.line != null ? esc(p.line) : "—"}</b><span>This line</span></div>
+            <div class="kpi"><b>${p.avg != null ? esc(fmtStat(p.avg)) : "—"}</b><span>Avg last ${Math.min(10, (p.recent || []).length) || 10}</span></div>
+            <div class="kpi"><b>${p.line != null ? esc(fmtStat(p.line)) : "—"}</b><span>This line</span></div>
           </div>`
         : "";
       showDrawer(shell(name, sub, `${note}${kpis}${l10Chart(p)}${gameLog(p.recent)}${poolHtml(p.maps)}`));
