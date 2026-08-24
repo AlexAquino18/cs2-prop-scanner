@@ -95,14 +95,12 @@ def _series_sums(map_rows: list[dict], stat_key: str, maps_n: int | None, team_i
 
 def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", line: float | None = None) -> dict:
     statsdb.init_db()
-    key = normalize_player_name(name)
-    player = statsdb.find_player(key)
+    player, err, queued = bdl_sync.lookup_or_fetch_player(name)
     if not player:
-        bdl_sync.prioritize_names([name], [], priority=10)
         return {
             "ok": False,
-            "queued": True,
-            "message": "Not in the player DB yet — queued a fetch. Check back in a minute.",
+            "queued": queued,
+            "message": err or "Player not found.",
             "player": name,
         }
     maps = statsdb.player_map_rows(player["id"], limit=12)
@@ -186,7 +184,7 @@ def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", l
             for p in pool[:8]
         ],
         "recent": samples,
-        "message": None if samples else "Stats are still syncing for this player.",
+        "message": None if samples else "Pulling recent maps from BallDontLie. Trial is 5 requests/min, so this can take about a minute.",
     }
 
 

@@ -437,6 +437,39 @@ def next_map_stats_id() -> int | None:
     return int(row["id"]) if row else None
 
 
+def recent_final_match_ids(team_id: int, limit: int = 8) -> list[int]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id FROM bdl_matches
+            WHERE status_state = 'final' AND (team1_id = ? OR team2_id = ?)
+            ORDER BY start_time DESC
+            LIMIT ?
+            """,
+            (team_id, team_id, limit),
+        ).fetchall()
+    return [int(r["id"]) for r in rows]
+
+
+def unsynced_map_ids_for_matches(match_ids: list[int], limit: int = 8) -> list[int]:
+    if not match_ids:
+        return []
+    placeholders = ",".join("?" * len(match_ids))
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id FROM bdl_match_maps
+            WHERE match_id IN ({placeholders})
+              AND IFNULL(stats_synced, 0) = 0
+              AND map_name IS NOT NULL
+            ORDER BY match_id DESC, map_number ASC
+            LIMIT ?
+            """,
+            (*match_ids, limit),
+        ).fetchall()
+    return [int(r["id"]) for r in rows]
+
+
 def next_match_stats_id() -> int | None:
     with _connect() as conn:
         row = conn.execute(

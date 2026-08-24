@@ -73,7 +73,10 @@ def healthz():
 @app.get("/")
 def index():
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
-    return HTMLResponse(html.replace("{{SITE_URL}}", config.PUBLIC_SITE_URL))
+    return HTMLResponse(
+        html.replace("{{SITE_URL}}", config.PUBLIC_SITE_URL),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/favicon.svg")

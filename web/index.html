@@ -93,8 +93,9 @@
     button.plink:hover, button.mlink:hover { text-decoration: underline; }
     .drawer {
       position: fixed; top: 0; right: 0; width: min(420px, 100vw); height: 100vh;
-      background: var(--bg); border-left: 1px solid var(--line); z-index: 20;
+      background: var(--bg); border-left: 1px solid var(--line); z-index: 40;
       overflow: auto; padding: 16px 16px 32px; display: none;
+      box-shadow: -12px 0 40px rgba(0,0,0,.45);
     }
     .drawer.open { display: block; }
     .drawer h2 { margin-top: 0; }
@@ -143,7 +144,7 @@
     Free tool for CS2 pick’em. Not gambling advice — lines move, odds can be stale, and a gap is not a lock.
     Data from PrizePicks, Underdog, and <a href="https://polymarket.com/esports/cs2" target="_blank" rel="noopener">Polymarket</a>. 18+.
   </footer>
-  <aside id="drawer" class="drawer" hidden></aside>
+  <aside id="drawer" class="drawer"></aside>
   <script>
     const $ = (id) => document.getElementById(id);
     const params = new URLSearchParams(location.search);
@@ -291,27 +292,16 @@
 
     function closeDrawer() {
       $("drawer").classList.remove("open");
-      $("drawer").hidden = true;
     }
 
     function showDrawer(html) {
-      $("drawer").hidden = false;
       $("drawer").classList.add("open");
       $("drawer").innerHTML = html;
       const x = $("drawer").querySelector("[data-close]");
       if (x) x.onclick = closeDrawer;
     }
 
-    async function openPlayer(ds) {
-      showDrawer(`<button data-close>Close</button><p class="meta">Loading ${esc(ds.name)}…</p>`);
-      const qs = new URLSearchParams({
-        name: ds.name || ds.key,
-        stat: ds.stat || "kills",
-        map: ds.map || "1-2",
-      });
-      if (ds.line) qs.set("line", ds.line);
-      const res = await fetch("/api/player?" + qs.toString());
-      const p = await res.json();
+    function renderPlayer(p, fallbackName) {
       const hits = p.hits
         ? `<div class="hit"><b>${p.hits.overs}/${p.hits.n}</b> overs vs ${p.hits.line} (${p.hits.pct}%)
             <div class="bar"><span style="width:${p.hits.pct}%"></span></div></div>`
@@ -334,7 +324,7 @@
         : `<p class="empty">${esc(p.message || "No map stats yet.")}</p>`;
       showDrawer(`
         <button data-close>Close</button>
-        <h2>${esc(p.player || ds.name)}</h2>
+        <h2>${esc(p.player || fallbackName)}</h2>
         <p class="meta">${esc([p.team, p.full_name, p.rank ? "WR #" + p.rank : ""].filter(Boolean).join(" · "))}</p>
         ${p.avg != null ? `<p>Avg ${esc(p.stat)}: <b>${p.avg}</b></p>` : ""}
         ${hits}
@@ -342,6 +332,24 @@
         ${recent}
         ${pool}
       `);
+    }
+
+    async function openPlayer(ds) {
+      showDrawer(`<button data-close>Close</button><p class="meta">Looking up ${esc(ds.name)}…</p>`);
+      const qs = new URLSearchParams({
+        name: ds.name || ds.key,
+        stat: ds.stat || "kills",
+        map: ds.map || "1-2",
+      });
+      if (ds.line) qs.set("line", ds.line);
+      for (let i = 0; i < 18; i++) {
+        const res = await fetch("/api/player?" + qs.toString());
+        const p = await res.json();
+        renderPlayer(p, ds.name);
+        if (!p.ok && !p.queued) break;
+        if (p.ok && (p.recent || []).length) break;
+        await new Promise((r) => setTimeout(r, 5000));
+      }
     }
 
     async function openMatchup(label) {
