@@ -18,11 +18,136 @@ MAP_LABELS = {
     "de_cache": "Cache",
 }
 
+ACTIVE_POOL = (
+    "de_ancient",
+    "de_anubis",
+    "de_cache",
+    "de_dust2",
+    "de_inferno",
+    "de_mirage",
+    "de_nuke",
+)
+POOL_GAMES = 20
+
 
 def map_label(name: str | None) -> str:
     if not name:
         return "—"
+    slug = canon_map(name)
+    if slug:
+        return MAP_LABELS.get(slug, slug.replace("de_", "").title())
     return MAP_LABELS.get(name, name.replace("de_", "").replace("_", " ").title())
+
+
+def canon_map(name: str | None) -> str | None:
+    raw = (name or "").strip().lower().replace(" ", "").replace("-", "").replace("_", "")
+    if raw.startswith("de"):
+        raw = raw[2:]
+    if raw in {"dustii", "dust2"}:
+        raw = "dust2"
+    slug = f"de_{raw}" if raw else ""
+    return slug if slug in MAP_LABELS else None
+
+
+def _blank_form() -> dict:
+    return {"played": 0, "wins": 0, "losses": 0, "map1": 0, "map2": 0}
+
+
+def recent_pool(team_id: int | None, games: int = POOL_GAMES) -> tuple[list[dict], int]:
+    if not team_id:
+        return [], 0
+    series = statsdb.recent_final_match_ids(team_id, games)
+    rows = statsdb.team_recent_maps(team_id, games)
+    stats = {slug: _blank_form() for slug in ACTIVE_POOL}
+    for row in rows:
+        slug = canon_map(row.get("map_name"))
+        if slug not in stats:
+            continue
+        st = stats[slug]
+        st["played"] += 1
+        num = row.get("map_number") or 0
+        if num == 1:
+            st["map1"] += 1
+        elif num == 2:
+            st["map2"] += 1
+        winner = row.get("winner_id")
+        if winner == team_id:
+            st["wins"] += 1
+        elif winner:
+            st["losses"] += 1
+    out = []
+    enough = len(series) >= 8
+    for slug in ACTIVE_POOL:
+        st = stats[slug]
+        played = st["played"]
+        decided = st["wins"] + st["losses"]
+        rate = round(100 * st["wins"] / decided) if decided else 0
+        out.append(
+            {
+                "map": slug,
+                "label": map_label(slug),
+                "played": played,
+                "wins": st["wins"],
+                "losses": st["losses"],
+                "win_rate": rate,
+                "map1": st["map1"],
+                "map2": st["map2"],
+                "likely_ban": bool(enough and played == 0),
+            }
+        )
+    out.sort(key=lambda m: (-m["played"], -m["win_rate"], m["label"]))
+    return out, len(series)
+
+
+def _project_maps(teams: list[dict]) -> dict | None:
+    if len(teams) < 2:
+        return None
+    a, b = teams[0], teams[1]
+    a_maps, b_maps = a.get("maps") or [], b.get("maps") or []
+    if not a_maps or not b_maps:
+        return None
+    a_bans = {m["map"] for m in a_maps if m.get("likely_ban")}
+    b_bans = {m["map"] for m in b_maps if m.get("likely_ban")}
+
+    def choose(maps: list[dict], opp_bans: set[str], taken: set[str]) -> dict | None:
+        ranked = sorted(
+            maps,
+            key=lambda m: (-(m.get("map1") or 0), -(m.get("played") or 0), -(m.get("win_rate") or 0)),
+        )
+        for row in ranked:
+            if row["map"] in taken or row.get("likely_ban"):
+                continue
+            if row["map"] in opp_bans:
+                continue
+            if row.get("played"):
+                return row
+        for row in ranked:
+            if row["map"] not in taken and not row.get("likely_ban"):
+                return row
+        return None
+
+    first = choose(a_maps, b_bans, set())
+    taken = {first["map"]} if first else set()
+    second = choose(b_maps, a_bans, taken)
+    if not first or not second:
+        return None
+    bans = []
+    for team in teams:
+        for row in team.get("maps") or []:
+            if row.get("likely_ban"):
+                bans.append({"team": team["name"], "map": row["label"]})
+    return {
+        "map1": {
+            "label": first["label"],
+            "why": f"{a['name']} pick",
+        },
+        "map2": {
+            "label": second["label"],
+            "why": f"{b['name']} pick",
+        },
+        "bans": bans,
+        "note": "From last 20 games, not a live veto.",
+    }
 
 
 def _same_org(a: str | None, b: str | None) -> bool:
@@ -229,25 +354,6 @@ def _hit_rate(samples: list[dict], line: float | None, n: int | None = None) -> 
     }
 
 
-def _pool_payload(pool: list[dict]) -> list[dict]:
-    out = []
-    for p in pool[:8]:
-        rate = p.get("win_rate") or 0
-        if rate <= 1:
-            rate = rate * 100
-        out.append(
-            {
-                "map": p["map_name"],
-                "label": map_label(p["map_name"]),
-                "played": p["matches_played"],
-                "wins": p["wins"],
-                "losses": p["losses"],
-                "win_rate": round(rate),
-            }
-        )
-    return out
-
-
 def player_profile(
     name: str,
     stat_key: str = "kills",
@@ -304,7 +410,7 @@ def player_profile(
     hits = _hit_rate(samples, line)
     avg = round(sum(s["value"] for s in samples) / len(samples), 1) if samples else None
     rank = statsdb.team_rank(side_id)
-    pool = statsdb.map_pool(side_id) if side_id else []
+    pool, _n = recent_pool(side_id)
     cached_at = None
     if side_id:
         cached_at = statsdb.meta_get(f"ready_at:{side_id}") or statsdb.meta_get(f"pool_at:{side_id}")
@@ -325,7 +431,7 @@ def player_profile(
         "hits": hits,
         "l5": _hit_rate(samples, line, 5),
         "l10": _hit_rate(samples, line, 10),
-        "maps": _pool_payload(pool),
+        "maps": pool,
         "recent": samples[:target],
         "cached_at": cached_at,
         "message": note,
@@ -346,21 +452,24 @@ def matchup_profile(label: str, sides_text: str | None = None) -> dict:
             teams.append({"name": name, "rank": None, "maps": [], "queued": False})
             continue
         rank = statsdb.team_rank(row["id"])
-        pool = statsdb.map_pool(row["id"])
+        pool, series_n = recent_pool(row["id"])
         teams.append(
             {
                 "name": row["name"],
                 "rank": rank.get("rank") if rank else None,
-                "maps": _pool_payload(pool),
-                "queued": False,
+                "maps": pool,
+                "series": series_n,
+                "queued": series_n == 0,
             }
         )
-    empty = [t["name"] for t in teams if not t["maps"]]
+    empty = [t["name"] for t in teams if not t["maps"] or t.get("queued")]
+    projected = _project_maps(teams)
     return {
         "ok": True,
         "label": " vs ".join(t["name"] for t in teams),
         "teams": teams,
+        "projected": projected,
         "queued": bool(empty),
         "status": "ready" if not empty else "loading",
-        "message": "Pulling map pools…" if empty else None,
+        "message": "Pulling recent maps…" if empty else None,
     }

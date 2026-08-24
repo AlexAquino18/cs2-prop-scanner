@@ -203,7 +203,17 @@
     .log { width: 100%; min-width: 460px; font-size: 12px; }
     .log th, .log td { padding: 6px 6px; white-space: nowrap; }
     .log .opp { max-width: 88px; overflow: hidden; text-overflow: ellipsis; }
-    .pool { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 8px; }
+    .pool { display: grid; gap: 8px; margin: 10px 0 8px; }
+    .pool .dim { opacity: 0.58; }
+    .proj {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+      padding: 12px; margin: 0 0 14px;
+    }
+    .proj-maps {
+      display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+      font-size: 20px; font-weight: 700; margin: 4px 0 6px;
+    }
+    .proj-maps span { color: var(--muted); font-size: 12px; font-weight: 600; }
     .pool > div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
     .pool .pct { height: 4px; background: #12171e; border-radius: 99px; margin-top: 6px; overflow: hidden; }
     .pool .pct > i { display: block; height: 100%; background: var(--accent); }
@@ -437,12 +447,36 @@
         <div class="d-body">${body}</div>`;
     }
 
-    function poolHtml(maps) {
+    function poolHtml(maps, title) {
       if (!(maps || []).length) return "";
-      return `<h2>Map pool</h2><div class="pool">${maps.map((m) =>
-        `<div><b>${esc(m.label)}</b><div class="meta">${m.wins}–${m.losses} · ${m.win_rate}%</div>
-         <div class="pct"><i style="width:${Math.max(0, Math.min(100, m.win_rate))}%"></i></div></div>`
-      ).join("")}</div>`;
+      const head = title ? `<h2>${esc(title)}</h2>` : "";
+      return `${head}<div class="pool">${maps.map((m) => {
+        const decided = (m.wins || 0) + (m.losses || 0);
+        const rec = m.played
+          ? `${m.wins}–${m.losses}${decided && m.win_rate != null ? " · " + m.win_rate + "%" : ""}`
+          : "no recent";
+        const ban = m.likely_ban ? `<span class="chip under">ban</span>` : "";
+        const width = decided ? Math.max(0, Math.min(100, m.win_rate || 0)) : 0;
+        return `<div class="${m.likely_ban ? "dim" : ""}">
+          <b>${esc(m.label)}</b> ${ban}
+          <div class="meta">${esc(rec)}</div>
+          <div class="pct"><i style="width:${width}%"></i></div>
+        </div>`;
+      }).join("")}</div>`;
+    }
+
+    function projectHtml(p) {
+      if (!p || !p.map1 || !p.map2) return "";
+      const bans = (p.bans || []).length
+        ? p.bans.map((b) => `${esc(b.map)} (${esc(b.team)})`).join(" · ")
+        : "none clear yet";
+      return `<div class="proj">
+        <div class="meta">Projected maps 1–2</div>
+        <div class="proj-maps"><b>${esc(p.map1.label)}</b><span>then</span><b>${esc(p.map2.label)}</b></div>
+        <div class="meta">${esc(p.map1.why || "")} · ${esc(p.map2.why || "")}</div>
+        <div class="meta">Likely bans: ${bans}</div>
+        <div class="meta">${esc(p.note || "")}</div>
+      </div>`;
     }
 
     function rateChip(label, block) {
@@ -535,7 +569,7 @@
             <div class="kpi"><b>${p.line != null ? esc(fmtStat(p.line)) : "—"}</b><span>This line</span></div>
           </div>`
         : "";
-      showDrawer(shell(name, sub, `${note}${kpis}${l10Chart(p)}${gameLog(p.recent)}${poolHtml(p.maps)}`));
+      showDrawer(shell(name, sub, `${note}${kpis}${l10Chart(p)}${gameLog(p.recent)}${poolHtml(p.maps, "Active pool · last 20")}`));
     }
 
     async function openPlayer(ds) {
@@ -571,11 +605,11 @@
 
     function renderMatchup(m, label) {
       const cols = (m.teams || []).map((t) => {
-        const maps = poolHtml(t.maps) || `<p class="empty">No map pool in today's snapshot yet.</p>`;
-        return `<div><h2>${esc(t.name)}${t.rank ? " · #" + t.rank : ""}</h2>${maps.replace("<h2>Map pool</h2>", "")}</div>`;
+        const maps = poolHtml(t.maps) || `<p class="empty">No recent maps in the snapshot yet.</p>`;
+        return `<div><h2>${esc(t.name)}${t.rank ? " · #" + t.rank : ""}</h2>${maps}</div>`;
       }).join("");
       const note = m.message ? `<div class="note ${m.queued ? "spin" : ""}">${esc(m.message)}</div>` : "";
-      showDrawer(shell(m.label || label, "Map pools", `${note}<div class="sides">${cols}</div>`));
+      showDrawer(shell(m.label || label, "Map pools", `${note}${projectHtml(m.projected)}<div class="sides">${cols}</div>`));
     }
 
     async function openMatchup(label, sides) {

@@ -11,7 +11,7 @@ from teams import team_key
 import statsdb
 
 MAPS_TARGET = 12
-MATCHES_TARGET = 15
+MATCHES_TARGET = 20
 STALE_HOURS = 20
 POOL_STALE_HOURS = 24 * 7
 

@@ -883,6 +883,26 @@ def team_rank(team_id: int | None) -> dict | None:
     return dict(row) if row else None
 
 
+def team_recent_maps(team_id: int, match_limit: int = 20) -> list[dict]:
+    ids = recent_final_match_ids(team_id, match_limit)
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT m.map_name, m.map_number, m.winner_id, g.id AS match_id,
+                   g.team1_id, g.team2_id, g.start_time
+            FROM bdl_match_maps m
+            JOIN bdl_matches g ON g.id = m.match_id
+            WHERE m.match_id IN ({placeholders})
+            ORDER BY g.start_time DESC, m.map_number ASC
+            """,
+            ids,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def map_pool(team_id: int) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
