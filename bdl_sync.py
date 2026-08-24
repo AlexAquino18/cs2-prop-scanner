@@ -12,6 +12,7 @@ import statsdb
 
 _LOCK = threading.Lock()
 _HYDRATING: set[int] = set()
+_HYDRATING_TEAMS: set[int] = set()
 _STATE = {
     "running": False,
     "last_error": None,
@@ -40,12 +41,12 @@ def lookup_or_fetch_player(name: str) -> tuple[dict | None, str | None, bool]:
     if not bdl.enabled():
         return None, "Player stats are not connected on this server.", False
     statsdb.want_hydrate(key)
-    got = _LOCK.acquire(timeout=0.8)
+    got = _LOCK.acquire(timeout=0.4)
     if not got:
         statsdb.enqueue("player_search", {"q": name}, priority=5)
         return None, "Looking this player up…", True
     try:
-        data = bdl.get("/players", [("search", name), ("per_page", "25")], wait_budget=0.3)
+        data = bdl.get("/players", [("search", name), ("per_page", "25")], wait_budget=2.5)
     except (bdl.BdlBusy, bdl.BdlError, Exception):
         statsdb.enqueue("player_search", {"q": name}, priority=5)
         return None, "Looking this player up…", True
@@ -65,11 +66,9 @@ def lookup_or_fetch_team(name: str) -> tuple[dict | None, bool]:
     statsdb.init_db()
     hit = statsdb.find_team(name, team_key)
     if hit:
-        if hit.get("id"):
-            if not statsdb.map_pool(hit["id"]):
-                statsdb.enqueue("map_pool", {"team_id": hit["id"]}, priority=8)
+        _kick_team(hit["id"])
         return hit, False
-    statsdb.enqueue("team_by_key", {"team": name, "key": team_key(name)}, priority=8)
+    statsdb.enqueue("team_by_key", {"team": name, "key": team_key(name)}, priority=5)
     return None, True
 
 
@@ -100,69 +99,80 @@ def _ingest_search_rows(query: str, rows: list[dict]) -> dict | None:
 def _kick_hydrate(player: dict) -> None:
     pid = player.get("id")
     team_id = player.get("team_id")
-    if team_id and not statsdb.map_pool(team_id):
-        statsdb.enqueue("map_pool", {"team_id": team_id}, priority=8)
-    if not pid or pid in _HYDRATING:
+    maps_n = len(statsdb.player_map_rows(pid, limit=8)) if pid else 0
+    pool_ok = (not team_id) or bool(statsdb.map_pool(team_id))
+    if maps_n >= 4 and pool_ok:
         return
-    if statsdb.player_map_rows(pid, limit=1):
-        return
-    team_id = player.get("team_id")
     if team_id:
-        statsdb.enqueue("team_matches", {"team_id": team_id}, priority=5)
-        statsdb.enqueue("map_pool", {"team_id": team_id}, priority=8)
-    _HYDRATING.add(pid)
+        _kick_team(team_id, pid)
+
+
+def _kick_team(team_id: int, player_id: int | None = None) -> None:
+    if not team_id or team_id in _HYDRATING_TEAMS:
+        return
+    pool_ok = bool(statsdb.map_pool(team_id))
+    maps_n = len(statsdb.player_map_rows(player_id, limit=8)) if player_id else 0
+    if pool_ok and maps_n >= 4:
+        return
+    _HYDRATING_TEAMS.add(team_id)
     threading.Thread(
-        target=_hydrate_player,
-        args=(player,),
+        target=_hydrate_team,
+        args=(team_id, player_id),
         daemon=True,
-        name=f"bdl-hydrate-{pid}",
+        name=f"bdl-team-{team_id}",
     ).start()
 
 
-def _hydrate_player(player: dict) -> None:
-    pid = player.get("id")
+def _slot_left() -> bool:
+    return bdl.time_until_slot() < 1.2
+
+
+def _hydrate_team(team_id: int, player_id: int | None = None) -> None:
     try:
         if not bdl.enabled():
             return
-        tid = player.get("team_id")
-        if not tid:
-            return
-        with _LOCK:
-            _STATE["running"] = True
-            try:
-                _STATE["last_job"] = _run_kind("team_matches", {"team_id": tid})
-                ids = statsdb.recent_final_match_ids(tid, 6)
-                for mid in statsdb.next_match_stats_ids_for_team(tid, 2):
-                    _STATE["last_job"] = _run_kind("match_stats", {"match_id": mid})
-                    if statsdb.player_match_rows(pid, limit=1):
-                        break
-                if ids:
-                    _STATE["last_job"] = _run_kind("match_maps", {"ids": ids})
-                for mid in statsdb.unsynced_map_ids_for_matches(ids, 8):
-                    _STATE["last_job"] = _run_kind("map_stats", {"match_map_id": mid})
-                    if statsdb.player_map_rows(pid, limit=1):
-                        break
-                if not statsdb.map_pool(tid):
-                    _STATE["last_job"] = _run_kind("map_pool", {"team_id": tid})
-                _STATE["last_error"] = None
-            except Exception as exc:
-                _STATE["last_error"] = str(exc)
-            finally:
-                _STATE["running"] = False
+        _STATE["running"] = True
+        try:
+            if not statsdb.map_pool(team_id):
+                _STATE["last_job"] = _run_kind("map_pool", {"team_id": team_id})
+            if not statsdb.recent_final_match_ids(team_id, 1):
+                _STATE["last_job"] = _run_kind("team_matches", {"team_id": team_id})
+            ids = statsdb.recent_final_match_ids(team_id, 4)
+            if ids and statsdb.match_map_count(ids) == 0:
+                _STATE["last_job"] = _run_kind("match_maps", {"ids": ids})
+            pulled = 0
+            for mid in statsdb.unsynced_map_ids_for_matches(ids, 6):
+                if pulled >= 2 and not _slot_left():
+                    break
+                _STATE["last_job"] = _run_kind("map_stats", {"match_map_id": mid})
+                pulled += 1
+                if player_id and len(statsdb.player_map_rows(player_id, limit=8)) >= 4:
+                    break
+            _STATE["last_error"] = None
+        except Exception as exc:
+            _STATE["last_error"] = str(exc)
+        finally:
+            _STATE["running"] = False
     finally:
-        if pid:
-            _HYDRATING.discard(pid)
+        _HYDRATING_TEAMS.discard(team_id)
 
 
 def prioritize_names(player_names: list[str], team_names: list[str], priority: int = 12) -> None:
     statsdb.init_db()
-    for name in team_names:
+    for name in team_names[:24]:
         key = team_key(name)
         if key:
-            statsdb.enqueue("team_by_key", {"team": name, "key": key}, priority=priority)
+            statsdb.enqueue("team_by_key", {"team": name, "key": key}, priority=min(priority, 9))
+    missing = 0
     for name in player_names:
-        if name:
-            statsdb.enqueue("player_search", {"q": name}, priority=priority)
+        if missing >= 20:
+            break
+        if not name:
+            continue
+        if statsdb.find_player(normalize_player_name(name)):
+            continue
+        statsdb.enqueue("player_search", {"q": name}, priority=max(priority, 16))
+        missing += 1
 
 
 def kick_catalog() -> None:
@@ -255,7 +265,8 @@ def _run_kind(kind: str, payload: dict) -> str:
         statsdb.upsert_teams(rows, team_key)
         hit = statsdb.find_team(name, team_key)
         if hit:
-            statsdb.enqueue("map_pool", {"team_id": hit["id"]}, priority=8)
+            statsdb.enqueue("map_pool", {"team_id": hit["id"]}, priority=6)
+            _kick_team(hit["id"])
         return f"team {name}"
     if kind == "team_matches":
         tid = payload["team_id"]
@@ -264,7 +275,7 @@ def _run_kind(kind: str, payload: dict) -> str:
         statsdb.upsert_matches(rows)
         ids = [r["id"] for r in rows if r.get("status_state") == "final"][:8]
         if ids:
-            statsdb.enqueue("match_maps", {"ids": ids}, priority=16)
+            statsdb.enqueue("match_maps", {"ids": ids}, priority=6)
         return f"matches team {tid} +{len(rows)}"
     if kind == "match_maps":
         ids = payload.get("ids") or []
@@ -298,18 +309,17 @@ def tick() -> str:
     if not bdl.enabled():
         return "disabled"
     statsdb.init_db()
-    with _LOCK:
-        _STATE["running"] = True
-        try:
-            note = _tick_job()
-            _STATE["last_job"] = note
-            _STATE["last_error"] = None
-            return note
-        except Exception as exc:
-            _STATE["last_error"] = str(exc)
-            return f"error: {exc}"
-        finally:
-            _STATE["running"] = False
+    _STATE["running"] = True
+    try:
+        note = _tick_job()
+        _STATE["last_job"] = note
+        _STATE["last_error"] = None
+        return note
+    except Exception as exc:
+        _STATE["last_error"] = str(exc)
+        return f"error: {exc}"
+    finally:
+        _STATE["running"] = False
 
 
 def loop() -> None:
@@ -320,7 +330,7 @@ def loop() -> None:
             if note == "idle" or note == "disabled":
                 threading.Event().wait(20)
             elif "429" in str(note):
-                threading.Event().wait(60)
+                threading.Event().wait(max(1.0, min(20.0, bdl.time_until_slot() or 2.0)))
         except Exception:
             threading.Event().wait(20)
 

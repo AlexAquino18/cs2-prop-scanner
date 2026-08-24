@@ -260,7 +260,7 @@ def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", l
     pool = statsdb.map_pool(player["team_id"]) if player.get("team_id") else []
     syncing = not samples
     if syncing:
-        note = note or "Pulling recent maps. This usually takes under a minute."
+        note = note or "Fetching recent maps…"
     return {
         "ok": True,
         "queued": syncing,

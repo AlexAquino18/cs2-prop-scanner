@@ -48,5 +48,7 @@ PUBLIC_SITE_URL = os.environ.get(
 # --- BallDontLie CS2 (player DB / map stats). Key in .env, never commit it. ---
 BALLDONTLIE_API_KEY = os.environ.get("BALLDONTLIE_API_KEY", "").strip()
 BALLDONTLIE_BASE_URL = "https://api.balldontlie.io/cs/v1"
-# Trial is 5 req/min. Paid GOAT is 600/min — drop this to 0.2 after upgrading.
-BALLDONTLIE_MIN_INTERVAL = float(os.environ.get("BALLDONTLIE_MIN_INTERVAL", "13"))
+# Spacing between burst calls. Rate-limit headers control the 5/min window.
+# Values >= 3 are treated as the old "13s trial spacer" and ignored.
+_bdl_gap = float(os.environ.get("BALLDONTLIE_MIN_INTERVAL", "0.08"))
+BALLDONTLIE_MIN_INTERVAL = 0.08 if _bdl_gap >= 3 else max(0.05, _bdl_gap)

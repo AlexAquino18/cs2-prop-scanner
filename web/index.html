@@ -452,15 +452,16 @@
         map: ds.map || "1-2",
       });
       if (ds.line) qs.set("line", ds.line);
-      for (let i = 0; i < 24; i++) {
+      for (let i = 0; i < 40; i++) {
         if (tick !== drawerTick) return;
         const res = await fetch("/api/player?" + qs.toString());
         const p = await res.json();
         if (tick !== drawerTick) return;
         renderPlayer(p, ds.name, ds);
         if (!p.ok && !p.queued) break;
-        if (p.ok && (p.recent || []).length) break;
-        await new Promise((r) => setTimeout(r, 4000));
+        if (p.ok && (p.recent || []).length && (p.maps || []).length) break;
+        if (p.ok && (p.recent || []).length && i >= 2) break;
+        await new Promise((r) => setTimeout(r, 900));
       }
     }
 
@@ -485,7 +486,7 @@
         if (tick !== drawerTick) return;
         renderMatchup(m, label);
         if (!m.queued) break;
-        await new Promise((r) => setTimeout(r, 5000));
+        await new Promise((r) => setTimeout(r, 900));
       }
     }
 

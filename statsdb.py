@@ -450,6 +450,18 @@ def next_map_stats_id() -> int | None:
     return int(row["id"]) if row else None
 
 
+def match_map_count(match_ids: list[int]) -> int:
+    if not match_ids:
+        return 0
+    placeholders = ",".join("?" * len(match_ids))
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM bdl_match_maps WHERE match_id IN ({placeholders})",
+            match_ids,
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def recent_final_match_ids(team_id: int, limit: int = 8) -> list[int]:
     with _connect() as conn:
         rows = conn.execute(
