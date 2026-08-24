@@ -25,13 +25,15 @@ STAT_ALIASES = [
 ]
 
 MAP_RANGE_PATTERNS = [
-    # "Maps 1-2", "Maps 1+2", "Map 1-3", "Map1-2"
-    re.compile(r"\bmaps?\s*(\d)\s*[+\-]\s*(\d)\b", re.I),
-    # "Map 1", "Map1"
-    re.compile(r"\bmap\s*(\d)\b", re.I),
+    # "Maps 1-2", "Maps 1+2", "Map 1-3", "Map1-2", "Games 1-2"
+    re.compile(r"\b(?:maps?|games?)\s*(\d)\s*[+\-]\s*(\d)\b", re.I),
+    # "Map 1", "Map1", "Game 1"
+    re.compile(r"\b(?:maps?|games?)\s*(\d)\b", re.I),
     # "M1-2" / "M1+2" shorthand some books use
     re.compile(r"\bm(\d)\s*[+\-]\s*(\d)\b", re.I),
     re.compile(r"\bm(\d)\b", re.I),
+    # "First Map Kills"
+    re.compile(r"\bfirst\s+map\b", re.I),
 ]
 
 SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
@@ -64,7 +66,7 @@ def extract_map_range(stat_label: str) -> tuple:
         m = pattern.search(label)
         if m:
             groups = [g for g in m.groups() if g]
-            map_range = "-".join(groups)
+            map_range = "-".join(groups) if groups else "1"
             cleaned = pattern.sub("", label).strip()
             cleaned = re.sub(r"\s+", " ", cleaned)
             return cleaned, map_range

@@ -38,6 +38,15 @@ def fmt_time(starts_at: str | None) -> str:
     return dt.strftime("%I:%M %p").lstrip("0")
 
 
+def format_stat(stat_key: str, map_range: str | None) -> str:
+    token = map_range or "full"
+    if token == "full":
+        return stat_key
+    if "-" in token:
+        return f"{stat_key} (maps {token})"
+    return f"{stat_key} (map {token})"
+
+
 def line_cell(current: float | None, opening: float | None) -> dict:
     if current is None:
         return {"value": None, "delta": None, "text": "—", "dir": ""}
@@ -104,7 +113,7 @@ def _match_label(matchup: str, team: str, series: dict | None) -> str:
     return team or "Other"
 
 
-def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int = 80) -> dict:
+def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int = 150) -> dict:
     store.init_db()
     snaps = store.latest_snapshot_ids(2)
     if not snaps:
@@ -158,7 +167,7 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
             {
                 "player": disc.player,
                 "team": team,
-                "stat": disc.stat,
+                "stat": format_stat(disc.stat, disc.map_range),
                 "map": disc.map_range or "full",
                 "matchup": matchup,
                 "start": fmt_time(any_prop.starts_at),
@@ -178,7 +187,8 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
         if "prizepicks" not in group or "underdog" not in group:
             continue
         any_prop = next(iter(group.values()))
-        key = (any_prop.player_key, any_prop.stat_key, any_prop.map_range or "full")
+        map_range = matching.preferred_map_range(group)
+        key = (any_prop.player_key, any_prop.stat_key, map_range or "full")
         if key in seen:
             continue
         seen.add(key)
@@ -197,7 +207,7 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
             {
                 "player": any_prop.player_raw,
                 "team": any_prop.team or "",
-                "stat": any_prop.stat_key,
+                "stat": format_stat(any_prop.stat_key, map_range),
                 "matchup": next((p.opponent for p in group.values() if p.opponent), ""),
                 "max_move": mag,
                 "spread_was": open_spread,

@@ -22,6 +22,17 @@ def _similar(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
+def _map_token(prop: PropLine) -> str:
+    return prop.map_range or "full"
+
+
+def preferred_map_range(group: dict) -> str | None:
+    tokens = {_map_token(p) for p in group.values()}
+    if "1" in tokens:
+        return "1"
+    return next(iter(group.values())).map_range
+
+
 def group_props(all_props: list) -> list:
     """
     Returns a list of groups, where each group is {source: PropLine}
@@ -64,6 +75,32 @@ def group_props(all_props: list) -> list:
                     group_a.update(group_b)
                     merged.add(gj)
 
+    # BO1: one book posts "Kills" (no map range) and the other posts
+    # "Map 1 Kills". Only merge when that player/stat has no maps 1-2
+    # line, so we don't pair a series total with a single map.
+    live = [idx for idx, _ in enumerate(groups) if idx not in merged]
+    by_player_stat = defaultdict(list)
+    for idx in live:
+        any_prop = next(iter(groups[idx].values()))
+        by_player_stat[(any_prop.player_key, any_prop.stat_key)].append(idx)
+    for indices in by_player_stat.values():
+        tokens = {_map_token(next(iter(groups[i].values()))) for i in indices}
+        if "1-2" in tokens or "1-3" in tokens:
+            continue
+        ones = [i for i in indices if _map_token(next(iter(groups[i].values()))) == "1"]
+        fulls = [i for i in indices if _map_token(next(iter(groups[i].values()))) == "full"]
+        for gi in ones:
+            if gi in merged:
+                continue
+            for gj in fulls:
+                if gj in merged:
+                    continue
+                group_a, group_b = groups[gi], groups[gj]
+                if set(group_a) & set(group_b):
+                    continue
+                group_a.update(group_b)
+                merged.add(gj)
+
     return [g for idx, g in enumerate(groups) if idx not in merged]
 
 
@@ -85,7 +122,7 @@ def find_discrepancies(groups: list, threshold: float = None) -> list:
                 player=any_prop.player_raw,
                 team=any_prop.team,
                 stat=any_prop.stat_key,
-                map_range=any_prop.map_range,
+                map_range=preferred_map_range(group),
                 lines=dict(group),
                 spread=spread,
             )

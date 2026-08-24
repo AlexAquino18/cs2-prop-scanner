@@ -82,6 +82,15 @@ def fetch(session: requests.Session = None) -> list[PropLine]:
             team = player_attrs.get("team") or player_attrs.get("team_name")
 
             stat_key, map_range = normalize_stat(stat_label)
+            if map_range is None:
+                extra_label = " ".join(
+                    part for part in (
+                        attrs.get("stat_display_name"),
+                        attrs.get("description"),
+                    ) if part
+                )
+                if extra_label:
+                    _, map_range = normalize_stat(extra_label)
 
             props.append(
                 PropLine(
