@@ -1,4 +1,5 @@
 data/
+seed/*.tmp.db
 __pycache__/
 *.pyc
 .env
