@@ -48,8 +48,9 @@ def lookup_or_fetch_player(name: str, team: str | None = None) -> tuple[dict | N
     key = normalize_player_name(name)
     hit = statsdb.find_player(key)
     if hit:
-        if not statsdb.player_map_rows(hit["id"], limit=1):
-            _boost_team(hit.get("team_name") or team, hit.get("team_id"))
+        _boost_team(hit.get("team_name") or team, hit.get("team_id"))
+        if team:
+            _boost_team(team)
         return hit, None, False
     if statsdb.is_miss(key):
         return None, f"No stats listing for {name}. A lot of T3 and mixer names are not in this database.", False
