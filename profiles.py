@@ -215,7 +215,7 @@ def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", l
             "recent": [],
             "maps": [],
         }
-    maps = statsdb.player_map_rows(player["id"], limit=12)
+    maps = statsdb.player_map_rows(player["id"], limit=15)
     matches = statsdb.player_match_rows(player["id"], limit=10)
     token = map_range or "full"
     note = None
@@ -258,13 +258,18 @@ def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", l
     avg = round(sum(s["value"] for s in samples) / len(samples), 1) if samples else None
     rank = statsdb.team_rank(player.get("team_id"))
     pool = statsdb.map_pool(player["team_id"]) if player.get("team_id") else []
-    syncing = not samples
-    if syncing:
-        note = note or "Fetching recent maps…"
+    cached_at = None
+    if player.get("team_id"):
+        cached_at = statsdb.meta_get(f"ready_at:{player['team_id']}") or statsdb.meta_get(
+            f"pool_at:{player['team_id']}"
+        )
+    cached_at = cached_at or statsdb.meta_get("last_daily")
+    if not samples:
+        note = note or "Not in today's snapshot yet. Last 10 maps and map pools refresh daily."
     return {
         "ok": True,
-        "queued": syncing,
-        "status": "ready" if samples else "loading",
+        "queued": False,
+        "status": "ready" if samples else "empty",
         "player": player["nickname"],
         "full_name": player.get("full_name"),
         "team": player.get("team_name"),
@@ -277,6 +282,7 @@ def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", l
         "hits": hits,
         "maps": _pool_payload(pool),
         "recent": samples,
+        "cached_at": cached_at,
         "message": note,
     }
 
@@ -287,32 +293,27 @@ def matchup_profile(label: str) -> dict:
     if len(sides) < 2:
         return {"ok": False, "queued": False, "message": "Need two teams.", "teams": []}
     teams = []
-    missing = []
     for name in sides[:2]:
-        row, queued = bdl_sync.lookup_or_fetch_team(name)
+        row, _queued = bdl_sync.lookup_or_fetch_team(name)
         if not row:
-            missing.append(name)
-            teams.append({"name": name, "rank": None, "maps": [], "queued": queued})
+            teams.append({"name": name, "rank": None, "maps": [], "queued": False})
             continue
         rank = statsdb.team_rank(row["id"])
         pool = statsdb.map_pool(row["id"])
-        if not pool:
-            missing.append(row.get("name") or name)
-            bdl_sync.prioritize_names([], [name], priority=8)
         teams.append(
             {
                 "name": row["name"],
                 "rank": rank.get("rank") if rank else None,
                 "maps": _pool_payload(pool),
-                "queued": not pool,
+                "queued": False,
             }
         )
-    loading = any(t.get("queued") for t in teams)
+    empty = [t["name"] for t in teams if not t["maps"]]
     return {
         "ok": True,
         "label": " vs ".join(t["name"] for t in teams),
         "teams": teams,
-        "queued": loading,
-        "status": "loading" if loading else "ready",
-        "message": "Loading map pools…" if loading else None,
+        "queued": False,
+        "status": "ready" if not empty else "empty",
+        "message": "Map pools refresh daily in the background." if empty else None,
     }

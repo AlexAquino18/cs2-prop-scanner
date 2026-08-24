@@ -27,6 +27,15 @@ def _safe_ingest() -> None:
         pass
 
 
+def _safe_daily_stats() -> None:
+    try:
+        import bdl_sync
+
+        bdl_sync.daily_refresh()
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.init_db()
@@ -40,6 +49,14 @@ async def lifespan(app: FastAPI):
             "interval",
             minutes=REFRESH_MINUTES,
             id="ingest",
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            _safe_daily_stats,
+            "interval",
+            hours=24,
+            id="bdl_daily",
             max_instances=1,
             coalesce=True,
         )

@@ -399,16 +399,16 @@
 
     function renderPlayer(p, fallbackName, ds) {
       const name = p.player || fallbackName;
-      const sub = [p.team, p.full_name, p.rank ? "WR #" + p.rank : ""].filter(Boolean).join(" · ");
+      const cache = p.cached_at ? "Snapshot " + fmtDay(p.cached_at) : "";
+      const sub = [p.team, p.full_name, p.rank ? "WR #" + p.rank : "", cache].filter(Boolean).join(" · ");
       if (!p.ok) {
         const msg = p.message || (p.queued ? "Looking this player up…" : "No stats for this player.");
         showDrawer(shell(name, sub, `<div class="note ${p.queued ? "spin" : ""}">${esc(msg)}</div>`));
         return;
       }
-      const loading = !p.ok || p.queued || !(p.recent || []).length;
       const note = p.message
-        ? `<div class="note ${loading ? "spin" : ""}">${esc(p.message)}</div>`
-        : (loading ? `<div class="note spin">Looking up recent maps for ${esc(name)}…</div>` : "");
+        ? `<div class="note ${p.queued ? "spin" : ""}">${esc(p.message)}</div>`
+        : "";
       const hits = p.hits
         ? `<div class="hit">
             <strong>${p.hits.overs} of ${p.hits.n} overs</strong>
@@ -445,31 +445,28 @@
 
     async function openPlayer(ds) {
       const tick = ++drawerTick;
-      showDrawer(shell(ds.name, "Player form", `<div class="note spin">Looking up ${esc(ds.name)}…</div>`));
+      showDrawer(shell(ds.name, "Player form", `<div class="note spin">Opening ${esc(ds.name)}…</div>`));
       const qs = new URLSearchParams({
         name: ds.name || ds.key,
         stat: ds.stat || "kills",
         map: ds.map || "1-2",
       });
       if (ds.line) qs.set("line", ds.line);
-      for (let i = 0; i < 40; i++) {
+      let p = null;
+      for (let i = 0; i < 4; i++) {
         if (tick !== drawerTick) return;
         const res = await fetch("/api/player?" + qs.toString());
-        const p = await res.json();
+        p = await res.json();
         if (tick !== drawerTick) return;
         renderPlayer(p, ds.name, ds);
-        if (!p.ok && !p.queued) break;
-        if (p.ok && (p.recent || []).length && (p.maps || []).length) break;
-        if (p.ok && (p.recent || []).length && i >= 2) break;
-        await new Promise((r) => setTimeout(r, 900));
+        if (!p.queued) break;
+        await new Promise((r) => setTimeout(r, 800));
       }
     }
 
     function renderMatchup(m, label) {
       const cols = (m.teams || []).map((t) => {
-        const maps = poolHtml(t.maps) || (t.queued
-          ? `<div class="note spin">Loading ${esc(t.name)} map pool…</div>`
-          : `<p class="empty">No map pool yet.</p>`);
+        const maps = poolHtml(t.maps) || `<p class="empty">No map pool in today's snapshot yet.</p>`;
         return `<div><h2>${esc(t.name)}${t.rank ? " · #" + t.rank : ""}</h2>${maps.replace("<h2>Map pool</h2>", "")}</div>`;
       }).join("");
       const note = m.message ? `<div class="note ${m.queued ? "spin" : ""}">${esc(m.message)}</div>` : "";
@@ -478,16 +475,11 @@
 
     async function openMatchup(label) {
       const tick = ++drawerTick;
-      showDrawer(shell(label, "Map pools", `<div class="note spin">Loading matchup…</div>`));
-      for (let i = 0; i < 12; i++) {
-        if (tick !== drawerTick) return;
-        const res = await fetch("/api/matchup?label=" + encodeURIComponent(label));
-        const m = await res.json();
-        if (tick !== drawerTick) return;
-        renderMatchup(m, label);
-        if (!m.queued) break;
-        await new Promise((r) => setTimeout(r, 900));
-      }
+      showDrawer(shell(label, "Map pools", `<div class="note spin">Opening matchup…</div>`));
+      const res = await fetch("/api/matchup?label=" + encodeURIComponent(label));
+      const m = await res.json();
+      if (tick !== drawerTick) return;
+      renderMatchup(m, label);
     }
 
     async function load() {

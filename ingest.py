@@ -66,7 +66,7 @@ def run_ingest() -> dict:
 
             names = list({p.player_raw for p in props if p.player_raw})
             teams = list({p.team for p in props if p.team})
-            bdl_sync.prioritize_names(names[:80], teams[:40], priority=12)
+            bdl_sync.schedule_board(names, teams)
             counts["bdl"] = bdl_sync.status()
         except Exception as exc:
             counts["bdl"] = f"error: {exc}"

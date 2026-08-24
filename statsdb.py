@@ -450,6 +450,45 @@ def next_map_stats_id() -> int | None:
     return int(row["id"]) if row else None
 
 
+def is_stale(key: str, hours: float = 24) -> bool:
+    raw = meta_get(key)
+    if not raw:
+        return True
+    try:
+        ts = datetime.fromisoformat(raw)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return True
+    return (datetime.now(timezone.utc) - ts).total_seconds() > hours * 3600
+
+
+def team_synced_map_count(team_id: int, match_ids: list[int] | None = None) -> int:
+    with _connect() as conn:
+        if match_ids:
+            placeholders = ",".join("?" * len(match_ids))
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM bdl_match_maps m
+                WHERE IFNULL(m.stats_synced, 0) = 1
+                  AND m.match_id IN ({placeholders})
+                """,
+                match_ids,
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM bdl_match_maps m
+                JOIN bdl_matches g ON g.id = m.match_id
+                WHERE IFNULL(m.stats_synced, 0) = 1
+                  AND (g.team1_id = ? OR g.team2_id = ?)
+                """,
+                (team_id, team_id),
+            ).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def match_map_count(match_ids: list[int]) -> int:
     if not match_ids:
         return 0
@@ -460,6 +499,19 @@ def match_map_count(match_ids: list[int]) -> int:
             match_ids,
         ).fetchone()
     return int(row["n"]) if row else 0
+
+
+def matches_missing_map_rows(match_ids: list[int]) -> list[int]:
+    if not match_ids:
+        return []
+    placeholders = ",".join("?" * len(match_ids))
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT match_id FROM bdl_match_maps WHERE match_id IN ({placeholders})",
+            match_ids,
+        ).fetchall()
+    have = {int(r["match_id"]) for r in rows}
+    return [mid for mid in match_ids if mid not in have]
 
 
 def recent_final_match_ids(team_id: int, limit: int = 8) -> list[int]:
@@ -622,6 +674,12 @@ def search_players(query: str, limit: int = 30) -> list[dict]:
                 (limit,),
             ).fetchall()
     return [dict(r) for r in rows]
+
+
+def find_team_by_id(team_id: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM bdl_teams WHERE id = ?", (team_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def find_team(team_name: str, team_key_fn) -> dict | None:

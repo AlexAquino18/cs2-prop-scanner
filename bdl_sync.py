@@ -10,9 +10,10 @@ from sources import bdl
 from teams import team_key
 import statsdb
 
+MAPS_TARGET = 12
+STALE_HOURS = 20
+
 _LOCK = threading.Lock()
-_HYDRATING: set[int] = set()
-_HYDRATING_TEAMS: set[int] = set()
 _STATE = {
     "running": False,
     "last_error": None,
@@ -22,53 +23,38 @@ _STATE = {
 
 def status() -> dict:
     statsdb.init_db()
-    out = {"enabled": bdl.enabled(), **statsdb.counts(), **_STATE}
+    out = {
+        "enabled": bdl.enabled(),
+        **statsdb.counts(),
+        **_STATE,
+        "last_daily": statsdb.meta_get("last_daily"),
+    }
     return out
 
 
 def lookup_or_fetch_player(name: str) -> tuple[dict | None, str | None, bool]:
-    """Load a player from SQLite, or search BallDontLie immediately."""
+    """SQLite only. Background jobs fill stats daily."""
     statsdb.init_db()
     key = normalize_player_name(name)
     hit = statsdb.find_player(key)
     if hit:
-        statsdb.clear_miss(key)
-        statsdb.pop_hydrate(key)
-        _kick_hydrate(hit)
         return hit, None, False
     if statsdb.is_miss(key):
         return None, f"No stats listing for {name}. A lot of T3 and mixer names are not in this database.", False
     if not bdl.enabled():
         return None, "Player stats are not connected on this server.", False
-    statsdb.want_hydrate(key)
-    got = _LOCK.acquire(timeout=0.4)
-    if not got:
-        statsdb.enqueue("player_search", {"q": name}, priority=5)
-        return None, "Looking this player up…", True
-    try:
-        data = bdl.get("/players", [("search", name), ("per_page", "25")], wait_budget=2.5)
-    except (bdl.BdlBusy, bdl.BdlError, Exception):
-        statsdb.enqueue("player_search", {"q": name}, priority=5)
-        return None, "Looking this player up…", True
-    finally:
-        _LOCK.release()
-    hit = _ingest_search_rows(name, data.get("data") or [])
-    if not hit:
-        statsdb.mark_miss(key)
-        return None, f"No stats listing for {name}. A lot of T3 and mixer names are not in this database.", False
-    statsdb.clear_miss(key)
-    statsdb.pop_hydrate(key)
-    _kick_hydrate(hit)
-    return hit, None, False
+    statsdb.enqueue("player_search", {"q": name}, priority=16)
+    return None, "Not in the daily stats snapshot yet.", True
 
 
 def lookup_or_fetch_team(name: str) -> tuple[dict | None, bool]:
     statsdb.init_db()
     hit = statsdb.find_team(name, team_key)
     if hit:
-        _kick_team(hit["id"])
+        if not statsdb.map_pool(hit["id"]):
+            statsdb.enqueue("team_refresh", {"team": name, "team_id": hit["id"]}, priority=12)
         return hit, False
-    statsdb.enqueue("team_by_key", {"team": name, "key": team_key(name)}, priority=5)
+    statsdb.enqueue("team_refresh", {"team": name}, priority=12)
     return None, True
 
 
@@ -96,83 +82,119 @@ def _ingest_search_rows(query: str, rows: list[dict]) -> dict | None:
     return _best_search_hit(query, rows)
 
 
-def _kick_hydrate(player: dict) -> None:
-    pid = player.get("id")
-    team_id = player.get("team_id")
-    maps_n = len(statsdb.player_map_rows(pid, limit=8)) if pid else 0
-    pool_ok = (not team_id) or bool(statsdb.map_pool(team_id))
-    if maps_n >= 4 and pool_ok:
-        return
-    if team_id:
-        _kick_team(team_id, pid)
-
-
-def _kick_team(team_id: int, player_id: int | None = None) -> None:
-    if not team_id or team_id in _HYDRATING_TEAMS:
-        return
-    pool_ok = bool(statsdb.map_pool(team_id))
-    maps_n = len(statsdb.player_map_rows(player_id, limit=8)) if player_id else 0
-    if pool_ok and maps_n >= 4:
-        return
-    _HYDRATING_TEAMS.add(team_id)
-    threading.Thread(
-        target=_hydrate_team,
-        args=(team_id, player_id),
-        daemon=True,
-        name=f"bdl-team-{team_id}",
-    ).start()
-
-
-def _slot_left() -> bool:
-    return bdl.time_until_slot() < 1.2
-
-
-def _hydrate_team(team_id: int, player_id: int | None = None) -> None:
-    try:
-        if not bdl.enabled():
-            return
-        _STATE["running"] = True
-        try:
-            if not statsdb.map_pool(team_id):
-                _STATE["last_job"] = _run_kind("map_pool", {"team_id": team_id})
-            if not statsdb.recent_final_match_ids(team_id, 1):
-                _STATE["last_job"] = _run_kind("team_matches", {"team_id": team_id})
-            ids = statsdb.recent_final_match_ids(team_id, 4)
-            if ids and statsdb.match_map_count(ids) == 0:
-                _STATE["last_job"] = _run_kind("match_maps", {"ids": ids})
-            pulled = 0
-            for mid in statsdb.unsynced_map_ids_for_matches(ids, 6):
-                if pulled >= 2 and not _slot_left():
-                    break
-                _STATE["last_job"] = _run_kind("map_stats", {"match_map_id": mid})
-                pulled += 1
-                if player_id and len(statsdb.player_map_rows(player_id, limit=8)) >= 4:
-                    break
-            _STATE["last_error"] = None
-        except Exception as exc:
-            _STATE["last_error"] = str(exc)
-        finally:
-            _STATE["running"] = False
-    finally:
-        _HYDRATING_TEAMS.discard(team_id)
-
-
-def prioritize_names(player_names: list[str], team_names: list[str], priority: int = 12) -> None:
+def schedule_board(player_names: list[str], team_names: list[str], force: bool = False) -> None:
+    """Queue last-10-maps + map-pool refresh for everyone on the live board."""
     statsdb.init_db()
-    for name in team_names[:24]:
-        key = team_key(name)
-        if key:
-            statsdb.enqueue("team_by_key", {"team": name, "key": key}, priority=min(priority, 9))
+    for name in team_names[:30]:
+        if not name:
+            continue
+        if force:
+            statsdb.meta_set(f"stale:{team_key(name)}", "1")
+        statsdb.enqueue("team_refresh", {"team": name}, priority=8)
     missing = 0
     for name in player_names:
-        if missing >= 20:
+        if missing >= 25:
             break
         if not name:
             continue
         if statsdb.find_player(normalize_player_name(name)):
             continue
-        statsdb.enqueue("player_search", {"q": name}, priority=max(priority, 16))
+        statsdb.enqueue("player_search", {"q": name}, priority=16)
         missing += 1
+
+
+def prioritize_names(player_names: list[str], team_names: list[str], priority: int = 12) -> None:
+    schedule_board(player_names, team_names, force=False)
+
+
+def daily_refresh() -> None:
+    if not bdl.enabled():
+        return
+    statsdb.init_db()
+    players, teams = _board_names()
+    schedule_board(players, teams, force=True)
+    if not statsdb.meta_get("rankings_at") or statsdb.is_stale("rankings_at", STALE_HOURS):
+        statsdb.enqueue("rankings", {}, priority=25)
+    statsdb.meta_set("last_daily", datetime.now(timezone.utc).isoformat())
+
+
+def _board_names() -> tuple[list[str], list[str]]:
+    try:
+        import store
+
+        latest = store.latest_snapshot_ids(1)
+        if not latest:
+            return [], []
+        lines = store.load_lines(latest[0][0])
+    except Exception:
+        return [], []
+    players = list(dict.fromkeys(p.player_raw for p in lines if p.player_raw))
+    teams = list(dict.fromkeys(p.team for p in lines if p.team))
+    return players, teams
+
+
+def _continue(payload: dict) -> None:
+    statsdb.enqueue("team_refresh", payload, priority=8)
+
+
+def _refresh_team(payload: dict) -> str:
+    name = payload.get("team") or ""
+    tid = payload.get("team_id")
+    hit = statsdb.find_team(name, team_key) if name else None
+    if not hit and tid:
+        hit = statsdb.find_team_by_id(tid)
+        if hit:
+            name = hit.get("name") or name
+    key = team_key(name) if name else ""
+    force = payload.get("force")
+    if force is None and key:
+        force = statsdb.meta_get(f"stale:{key}") == "1"
+        if force:
+            statsdb.meta_set(f"stale:{key}", "")
+    if not hit:
+        data = bdl.get("/teams", [("search", name), ("per_page", "25")])
+        statsdb.upsert_teams(data.get("data") or [], team_key)
+        hit = statsdb.find_team(name, team_key)
+        if hit:
+            _continue({"team": name, "team_id": hit["id"], "force": bool(force)})
+        return f"team search {name}"
+    tid = hit["id"]
+    nxt = {"team": name or hit.get("name"), "team_id": tid, "force": bool(force)}
+    pool_key = f"pool_at:{tid}"
+    match_key = f"matches_at:{tid}"
+    if not payload.get("did_pool") and (force or not statsdb.map_pool(tid) or statsdb.is_stale(pool_key, STALE_HOURS)):
+        _run_kind("map_pool", {"team_id": tid})
+        statsdb.meta_set(pool_key, datetime.now(timezone.utc).isoformat())
+        nxt["did_pool"] = True
+        _continue(nxt)
+        return f"pool {tid}"
+    nxt["did_pool"] = True
+    if not payload.get("did_matches") and (
+        force or not statsdb.recent_final_match_ids(tid, 1) or statsdb.is_stale(match_key, STALE_HOURS)
+    ):
+        _run_kind("team_matches", {"team_id": tid})
+        statsdb.meta_set(match_key, datetime.now(timezone.utc).isoformat())
+        nxt["did_matches"] = True
+        nxt["force"] = False
+        _continue(nxt)
+        return f"matches {tid}"
+    nxt["did_matches"] = True
+    nxt["force"] = False
+    ids = statsdb.recent_final_match_ids(tid, 8)
+    missing_maps = statsdb.matches_missing_map_rows(ids)
+    if missing_maps:
+        _run_kind("match_maps", {"ids": missing_maps})
+        _continue(nxt)
+        return f"maps {tid}"
+    have = statsdb.team_synced_map_count(tid, ids)
+    if have < MAPS_TARGET:
+        nxt_ids = statsdb.unsynced_map_ids_for_matches(ids, 1)
+        if nxt_ids:
+            _run_kind("map_stats", {"match_map_id": nxt_ids[0]})
+            _continue(nxt)
+            return f"map stats {tid} {have + 1}/{MAPS_TARGET}"
+    statsdb.meta_set(f"ready_at:{tid}", datetime.now(timezone.utc).isoformat())
+    return f"ready {name or tid} maps={have}"
 
 
 def kick_catalog() -> None:
@@ -217,6 +239,8 @@ def _tick_job() -> str:
 
 
 def _run_kind(kind: str, payload: dict) -> str:
+    if kind == "team_refresh":
+        return _refresh_team(payload)
     if kind == "players_page":
         data = bdl.get("/players", _params(payload.get("cursor"), [("active", "true")]))
         rows = data.get("data") or []
@@ -253,8 +277,13 @@ def _run_kind(kind: str, payload: dict) -> str:
         key = normalize_player_name(q)
         if hit:
             statsdb.clear_miss(key)
-            if statsdb.pop_hydrate(key):
-                _kick_hydrate(hit)
+            tid = hit.get("team_id")
+            if tid:
+                statsdb.enqueue(
+                    "team_refresh",
+                    {"team": hit.get("team_name") or q, "team_id": tid},
+                    priority=10,
+                )
         elif not rows:
             statsdb.mark_miss(key)
         return f"search {q} +{len(rows)}"
@@ -265,8 +294,7 @@ def _run_kind(kind: str, payload: dict) -> str:
         statsdb.upsert_teams(rows, team_key)
         hit = statsdb.find_team(name, team_key)
         if hit:
-            statsdb.enqueue("map_pool", {"team_id": hit["id"]}, priority=6)
-            _kick_team(hit["id"])
+            statsdb.enqueue("team_refresh", {"team": name, "team_id": hit["id"]}, priority=8)
         return f"team {name}"
     if kind == "team_matches":
         tid = payload["team_id"]
@@ -289,6 +317,9 @@ def _run_kind(kind: str, payload: dict) -> str:
         data = bdl.get("/player_match_map_stats", [("match_map_id", mid)])
         rows = data.get("data") or []
         statsdb.upsert_player_map_stats(mid, rows)
+        nested = [r.get("player") for r in rows if (r.get("player") or {}).get("id")]
+        if nested:
+            statsdb.upsert_players(nested, normalize_player_name)
         return f"map stats {mid} +{len(rows)}"
     if kind == "match_stats":
         mid = payload["match_id"]
@@ -340,5 +371,7 @@ def start_background() -> None:
         return
     statsdb.init_db()
     statsdb.drop_jobs("players_page", "teams_page")
+    if statsdb.is_stale("last_daily", STALE_HOURS):
+        daily_refresh()
     t = threading.Thread(target=loop, daemon=True, name="bdl-sync")
     t.start()
