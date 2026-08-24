@@ -32,12 +32,13 @@
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+    body.noscroll { overflow: hidden; }
     header {
       display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
       justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--line);
     }
     h1 { font-size: 20px; margin: 0; font-weight: 650; }
-    .lede { color: var(--muted); font-size: 13px; margin: 4px 0 0; max-width: 520px; }
+    .lede { color: var(--muted); font-size: 13px; margin: 4px 0 0; max-width: 560px; }
     .meta { color: var(--muted); font-size: 12px; }
     main { padding: 18px 22px 24px; max-width: 1100px; margin: 0 auto; }
     .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
@@ -89,25 +90,80 @@
     button.plink, button.mlink {
       background: none; border: 0; padding: 0; color: var(--accent);
       cursor: pointer; font: inherit; text-align: left;
+      text-decoration: underline; text-underline-offset: 3px;
+      text-decoration-color: #31587a;
     }
-    button.plink:hover, button.mlink:hover { text-decoration: underline; }
+    button.plink:hover, button.mlink:hover { text-decoration-color: currentColor; }
+    .scrim {
+      display: none; position: fixed; inset: 0; background: rgba(2, 6, 12, .62);
+      z-index: 30; backdrop-filter: blur(2px);
+    }
+    .scrim.open { display: block; }
     .drawer {
-      position: fixed; top: 0; right: 0; width: min(420px, 100vw); height: 100vh;
-      background: var(--bg); border-left: 1px solid var(--line); z-index: 40;
-      overflow: auto; padding: 16px 16px 32px; display: none;
-      box-shadow: -12px 0 40px rgba(0,0,0,.45);
+      position: fixed; top: 0; right: 0; width: min(440px, 100vw); height: 100vh;
+      background: #0f141b; border-left: 1px solid var(--line); z-index: 40;
+      transform: translateX(104%); transition: transform .22s ease;
+      display: flex; flex-direction: column; box-shadow: -18px 0 50px rgba(0,0,0,.45);
     }
-    .drawer.open { display: block; }
-    .drawer h2 { margin-top: 0; }
-    .hit { margin: 8px 0 12px; }
-    .bar {
-      height: 8px; background: #12171e; border-radius: 99px; overflow: hidden; margin-top: 4px;
+    .drawer.open { transform: translateX(0); }
+    .d-head {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 16px 16px 14px; border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; background: #0f141b; z-index: 1;
     }
+    .avatar {
+      flex: 0 0 42px; width: 42px; height: 42px; border-radius: 12px;
+      background: #1c2c40; color: var(--accent); display: grid; place-items: center;
+      font-weight: 700; letter-spacing: .02em;
+    }
+    .d-head h2 { margin: 0; font-size: 18px; line-height: 1.2; }
+    .d-body { padding: 16px 16px 32px; overflow: auto; flex: 1; }
+    .x {
+      margin-left: auto; width: 34px; height: 34px; border-radius: 8px;
+      display: grid; place-items: center; padding: 0; font-size: 18px; color: var(--muted);
+    }
+    .x:hover { color: var(--text); border-color: #3d4a5c; }
+    .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0 0 14px; }
+    .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+    .kpi b { display: block; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .kpi span { color: var(--muted); font-size: 11px; }
+    .hit { margin: 0 0 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+    .hit strong { font-size: 15px; }
+    .bar { height: 8px; background: #12171e; border-radius: 99px; overflow: hidden; margin: 8px 0 6px; }
     .bar > span { display: block; height: 100%; background: var(--up); }
-    .pool { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 16px; }
-    .pool div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
-    .recent td.over { color: var(--up); }
-    .recent td.under { color: var(--down); }
+    .note {
+      background: #151b24; border: 1px solid var(--line); color: var(--muted);
+      border-radius: 10px; padding: 10px 12px; margin: 0 0 14px; font-size: 13px;
+    }
+    .note.spin::before {
+      content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 8px;
+      border: 2px solid #3d4a5c; border-top-color: var(--accent); border-radius: 50%;
+      animation: spin .8s linear infinite; vertical-align: -1px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .games { display: flex; flex-direction: column; gap: 8px; margin: 0 0 18px; }
+    .game {
+      display: grid; grid-template-columns: 1fr auto; gap: 8px 12px;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    }
+    .game .who { font-weight: 650; }
+    .game .val { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .chip {
+      display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 11px;
+      font-weight: 650; border: 1px solid var(--line); text-transform: uppercase; letter-spacing: .04em;
+    }
+    .chip.over { color: var(--up); border-color: #238636; background: #102318; }
+    .chip.under { color: var(--down); border-color: #8b2c28; background: #2a1211; }
+    .chip.push { color: var(--warn); }
+    .pool { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 8px; }
+    .pool > div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+    .pool .pct { height: 4px; background: #12171e; border-radius: 99px; margin-top: 6px; overflow: hidden; }
+    .pool .pct > i { display: block; height: 100%; background: var(--accent); }
+    .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 520px) {
+      .sides { grid-template-columns: 1fr; }
+      .kpis { grid-template-columns: 1fr 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -137,19 +193,21 @@
     <p class="meta" style="margin:-2px 0 10px">Vs the first line we saw. Stays until the prop leaves the board.</p>
     <div id="movers"></div>
     <h2>Gaps by match</h2>
-    <p class="meta" style="margin:-2px 0 12px">Same player, same stat, different books. Percentages are Polymarket series winner.</p>
+    <p class="meta" style="margin:-2px 0 12px">Same player, same stat, different books. Click a name for form. Percentages are Polymarket series winner.</p>
     <div id="matches"></div>
   </main>
   <footer>
     Free tool for CS2 pick’em. Not gambling advice — lines move, odds can be stale, and a gap is not a lock.
-    Data from PrizePicks, Underdog, and <a href="https://polymarket.com/esports/cs2" target="_blank" rel="noopener">Polymarket</a>. 18+.
+    Data from PrizePicks, Underdog, Polymarket, and BallDontLie. 18+.
   </footer>
-  <aside id="drawer" class="drawer"></aside>
+  <div id="scrim" class="scrim"></div>
+  <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="d-title"></aside>
   <script>
     const $ = (id) => document.getElementById(id);
     const params = new URLSearchParams(location.search);
     let currentDate = params.get("date");
     let boardData = null;
+    let drawerTick = 0;
     if (params.get("threshold")) $("threshold").value = params.get("threshold");
 
     function esc(s) {
@@ -178,6 +236,18 @@
       return "Updated " + new Date(iso).toLocaleString();
     }
 
+    function fmtDay(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+
+    function initials(name) {
+      const t = String(name || "?").trim();
+      return esc(t.slice(0, 2).toUpperCase());
+    }
+
     function oddsPills(series) {
       if (!series) return `<span class="meta">No series market</span>`;
       const aFav = series.a.pct >= series.b.pct;
@@ -202,7 +272,7 @@
 
     function playerBtn(row) {
       const line = row.prizepicks?.value ?? row.underdog?.value ?? "";
-      return `<button class="plink" data-name="${esc(row.player)}" data-key="${esc(row.player_key || row.player)}" data-stat="${esc(row.stat_key || "kills")}" data-map="${esc(row.map || "full")}" data-line="${line}">${esc(row.player)}</button>`;
+      return `<button type="button" class="plink" data-name="${esc(row.player)}" data-key="${esc(row.player_key || row.player)}" data-stat="${esc(row.stat_key || "kills")}" data-map="${esc(row.map || "full")}" data-line="${line}">${esc(row.player)}</button>`;
     }
 
     function gapRow(g) {
@@ -230,7 +300,7 @@
         ["Gaps", s.gaps ?? 0],
         ["Matches", s.matches ?? 0],
         ["Series odds", s.series ?? 0],
-        ["Player DB", s.players ?? 0],
+        ["Player stats", s.players ?? 0],
         ["Movers", s.movers ?? 0],
         ["PrizePicks", s.prizepicks ?? 0],
         ["Underdog", s.underdog ?? 0],
@@ -265,7 +335,7 @@
         <section class="match">
           <div class="match-head">
             <div>
-              <h3><button class="mlink" data-label="${esc(m.label)}">${esc(m.label)}</button></h3>
+              <h3><button type="button" class="mlink" data-label="${esc(m.label)}">${esc(m.label)}</button></h3>
               <div class="meta">${esc(m.start || "")}</div>
             </div>
             ${oddsPills(m.series)}
@@ -291,78 +361,132 @@
     }
 
     function closeDrawer() {
+      drawerTick += 1;
       $("drawer").classList.remove("open");
+      $("scrim").classList.remove("open");
+      document.body.classList.remove("noscroll");
     }
 
     function showDrawer(html) {
       $("drawer").classList.add("open");
+      $("scrim").classList.add("open");
+      document.body.classList.add("noscroll");
       $("drawer").innerHTML = html;
       const x = $("drawer").querySelector("[data-close]");
       if (x) x.onclick = closeDrawer;
     }
 
-    function renderPlayer(p, fallbackName) {
+    function shell(title, sub, body) {
+      return `
+        <div class="d-head">
+          <div class="avatar">${initials(title)}</div>
+          <div>
+            <h2 id="d-title">${esc(title)}</h2>
+            <div class="meta">${esc(sub || "")}</div>
+          </div>
+          <button type="button" class="x" data-close aria-label="Close">×</button>
+        </div>
+        <div class="d-body">${body}</div>`;
+    }
+
+    function poolHtml(maps) {
+      if (!(maps || []).length) return "";
+      return `<h2>Map pool</h2><div class="pool">${maps.map((m) =>
+        `<div><b>${esc(m.label)}</b><div class="meta">${m.wins}–${m.losses} · ${m.win_rate}%</div>
+         <div class="pct"><i style="width:${Math.max(0, Math.min(100, m.win_rate))}%"></i></div></div>`
+      ).join("")}</div>`;
+    }
+
+    function renderPlayer(p, fallbackName, ds) {
+      const name = p.player || fallbackName;
+      const sub = [p.team, p.full_name, p.rank ? "WR #" + p.rank : ""].filter(Boolean).join(" · ");
+      if (!p.ok) {
+        const msg = p.message || (p.queued ? "Looking this player up…" : "No stats for this player.");
+        showDrawer(shell(name, sub, `<div class="note ${p.queued ? "spin" : ""}">${esc(msg)}</div>`));
+        return;
+      }
+      const loading = !p.ok || p.queued || !(p.recent || []).length;
+      const note = p.message
+        ? `<div class="note ${loading ? "spin" : ""}">${esc(p.message)}</div>`
+        : (loading ? `<div class="note spin">Looking up recent maps for ${esc(name)}…</div>` : "");
       const hits = p.hits
-        ? `<div class="hit"><b>${p.hits.overs}/${p.hits.n}</b> overs vs ${p.hits.line} (${p.hits.pct}%)
-            <div class="bar"><span style="width:${p.hits.pct}%"></span></div></div>`
+        ? `<div class="hit">
+            <strong>${p.hits.overs} of ${p.hits.n} overs</strong>
+            <div class="bar"><span style="width:${p.hits.pct}%"></span></div>
+            <div class="meta">Went over ${p.hits.line} in ${p.hits.pct}% of these samples.</div>
+          </div>`
         : "";
-      const pool = (p.maps || []).length
-        ? `<h2>Map pool</h2><div class="pool">${p.maps.map((m) =>
-            `<div><b>${esc(m.label)}</b><div class="meta">${m.wins}-${m.losses} (${m.win_rate}%)</div></div>`
-          ).join("")}</div>`
+      const kpis = (p.avg != null || p.line != null)
+        ? `<div class="kpis">
+            <div class="kpi"><b>${p.avg != null ? esc(p.avg) : "—"}</b><span>Avg ${esc(p.stat || "stat")}</span></div>
+            <div class="kpi"><b>${p.line != null ? esc(p.line) : "—"}</b><span>This line</span></div>
+          </div>`
         : "";
       const recent = (p.recent || []).length
-        ? table(
-            ["When", "Opp", "Maps", p.stat || "Stat"],
-            p.recent.map((r) => {
-              const cls = p.hits ? (r.value > p.hits.line ? "over" : "under") : "";
-              const when = r.start ? new Date(r.start).toLocaleDateString() : "";
-              return [esc(when), esc(r.opponent || "—"), esc(r.maps || "—"), `<span class="${cls}">${r.value}</span>`];
-            }),
-            ["", "", "", "num"]
-          )
-        : `<p class="empty">${esc(p.message || "No map stats yet.")}</p>`;
-      showDrawer(`
-        <button data-close>Close</button>
-        <h2>${esc(p.player || fallbackName)}</h2>
-        <p class="meta">${esc([p.team, p.full_name, p.rank ? "WR #" + p.rank : ""].filter(Boolean).join(" · "))}</p>
-        ${p.avg != null ? `<p>Avg ${esc(p.stat)}: <b>${p.avg}</b></p>` : ""}
-        ${hits}
-        <h2>Recent</h2>
-        ${recent}
-        ${pool}
-      `);
+        ? `<div class="games">${p.recent.map((r) => {
+            const chip = r.vs ? `<span class="chip ${esc(r.vs)}">${esc(r.vs)}</span>` : "";
+            const kd = (r.kills != null && r.deaths != null) ? `${r.kills}–${r.deaths}` : "";
+            const extra = [kd, r.adr != null ? `ADR ${Math.round(r.adr)}` : "", (r.rating != null && r.rating >= 0.4 && r.rating <= 2.8) ? `rt ${Number(r.rating).toFixed(2)}` : ""]
+              .filter(Boolean).join(" · ");
+            return `<div class="game">
+              <div>
+                <div class="who">${esc(fmtDay(r.start))} vs ${esc(r.opponent || "—")}</div>
+                <div class="meta">${esc(r.maps || "")}${extra ? " · " + esc(extra) : ""}</div>
+              </div>
+              <div style="text-align:right">
+                <div class="val ${r.vs || ""}">${esc(r.value)}</div>
+                ${chip}
+              </div>
+            </div>`;
+          }).join("")}</div>`
+        : "";
+      showDrawer(shell(name, sub, `${note}${kpis}${hits}${recent ? "<h2>Recent</h2>" + recent : ""}${poolHtml(p.maps)}`));
     }
 
     async function openPlayer(ds) {
-      showDrawer(`<button data-close>Close</button><p class="meta">Looking up ${esc(ds.name)}…</p>`);
+      const tick = ++drawerTick;
+      showDrawer(shell(ds.name, "Player form", `<div class="note spin">Looking up ${esc(ds.name)}…</div>`));
       const qs = new URLSearchParams({
         name: ds.name || ds.key,
         stat: ds.stat || "kills",
         map: ds.map || "1-2",
       });
       if (ds.line) qs.set("line", ds.line);
-      for (let i = 0; i < 18; i++) {
+      for (let i = 0; i < 24; i++) {
+        if (tick !== drawerTick) return;
         const res = await fetch("/api/player?" + qs.toString());
         const p = await res.json();
-        renderPlayer(p, ds.name);
+        if (tick !== drawerTick) return;
+        renderPlayer(p, ds.name, ds);
         if (!p.ok && !p.queued) break;
         if (p.ok && (p.recent || []).length) break;
-        await new Promise((r) => setTimeout(r, 5000));
+        await new Promise((r) => setTimeout(r, 4000));
       }
     }
 
-    async function openMatchup(label) {
-      showDrawer(`<button data-close>Close</button><p class="meta">Loading matchup…</p>`);
-      const res = await fetch("/api/matchup?label=" + encodeURIComponent(label));
-      const m = await res.json();
+    function renderMatchup(m, label) {
       const cols = (m.teams || []).map((t) => {
-        const maps = (t.maps || []).map((x) =>
-          `<div><b>${esc(x.label)}</b><div class="meta">${x.wins}-${x.losses} (${x.win_rate}%)</div></div>`
-        ).join("") || `<p class="empty">Map pool still syncing.</p>`;
-        return `<div><h2>${esc(t.name)}${t.rank ? " · #" + t.rank : ""}</h2><div class="pool">${maps}</div></div>`;
+        const maps = poolHtml(t.maps) || (t.queued
+          ? `<div class="note spin">Loading ${esc(t.name)} map pool…</div>`
+          : `<p class="empty">No map pool yet.</p>`);
+        return `<div><h2>${esc(t.name)}${t.rank ? " · #" + t.rank : ""}</h2>${maps.replace("<h2>Map pool</h2>", "")}</div>`;
       }).join("");
-      showDrawer(`<button data-close>Close</button>${m.message ? `<p class="meta">${esc(m.message)}</p>` : ""}${cols}`);
+      const note = m.message ? `<div class="note ${m.queued ? "spin" : ""}">${esc(m.message)}</div>` : "";
+      showDrawer(shell(m.label || label, "Map pools", `${note}<div class="sides">${cols}</div>`));
+    }
+
+    async function openMatchup(label) {
+      const tick = ++drawerTick;
+      showDrawer(shell(label, "Map pools", `<div class="note spin">Loading matchup…</div>`));
+      for (let i = 0; i < 12; i++) {
+        if (tick !== drawerTick) return;
+        const res = await fetch("/api/matchup?label=" + encodeURIComponent(label));
+        const m = await res.json();
+        if (tick !== drawerTick) return;
+        renderMatchup(m, label);
+        if (!m.queued) break;
+        await new Promise((r) => setTimeout(r, 5000));
+      }
     }
 
     async function load() {
@@ -390,6 +514,10 @@
         $("refresh").textContent = "Refresh lines";
       }
     };
+    $("scrim").onclick = closeDrawer;
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeDrawer();
+    });
     load().then(async () => {
       for (let i = 0; i < 20; i++) {
         let st = {};

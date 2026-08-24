@@ -144,16 +144,29 @@ def meta_set(key: str, value: str) -> None:
 def enqueue(kind: str, payload: dict, priority: int = 50) -> None:
     blob = json.dumps(payload, sort_keys=True)
     with _connect() as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM bdl_jobs WHERE kind = ? AND payload = ?",
+        row = conn.execute(
+            "SELECT id, priority FROM bdl_jobs WHERE kind = ? AND payload = ?",
             (kind, blob),
         ).fetchone()
-        if exists:
+        if row:
+            if priority < int(row["priority"]):
+                conn.execute(
+                    "UPDATE bdl_jobs SET priority = ? WHERE id = ?",
+                    (priority, row["id"]),
+                )
             return
         conn.execute(
             "INSERT INTO bdl_jobs (kind, payload, priority, created_at) VALUES (?, ?, ?, ?)",
             (kind, blob, priority, now()),
         )
+
+
+def drop_jobs(*kinds: str) -> None:
+    if not kinds:
+        return
+    placeholders = ",".join("?" * len(kinds))
+    with _connect() as conn:
+        conn.execute(f"DELETE FROM bdl_jobs WHERE kind IN ({placeholders})", kinds)
 
 
 def pop_job(max_priority: int | None = None) -> tuple[str, dict] | None:
@@ -470,6 +483,22 @@ def unsynced_map_ids_for_matches(match_ids: list[int], limit: int = 8) -> list[i
     return [int(r["id"]) for r in rows]
 
 
+def next_match_stats_ids_for_team(team_id: int, limit: int = 3) -> list[int]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id FROM bdl_matches
+            WHERE status_state = 'final'
+              AND (team1_id = ? OR team2_id = ?)
+              AND IFNULL(match_stats_synced, 0) = 0
+            ORDER BY start_time DESC
+            LIMIT ?
+            """,
+            (team_id, team_id, limit),
+        ).fetchall()
+    return [int(r["id"]) for r in rows]
+
+
 def next_match_stats_id() -> int | None:
     with _connect() as conn:
         row = conn.execute(
@@ -485,6 +514,9 @@ def next_match_stats_id() -> int | None:
 
 
 def find_player(player_key: str) -> dict | None:
+    key = (player_key or "").strip().lower()
+    if not key:
+        return None
     with _connect() as conn:
         row = conn.execute(
             """
@@ -493,19 +525,65 @@ def find_player(player_key: str) -> dict | None:
             ORDER BY is_active DESC, id DESC
             LIMIT 1
             """,
-            (player_key,),
+            (key,),
         ).fetchone()
         if not row:
             row = conn.execute(
                 """
                 SELECT * FROM bdl_players
-                WHERE lower(nickname) = ? OR player_key LIKE ?
-                ORDER BY is_active DESC
+                WHERE lower(nickname) = ?
+                ORDER BY is_active DESC, id DESC
                 LIMIT 1
                 """,
-                (player_key, f"%{player_key}%"),
+                (key,),
+            ).fetchone()
+        if not row and len(key) >= 4:
+            row = conn.execute(
+                """
+                SELECT * FROM bdl_players
+                WHERE player_key LIKE ? OR lower(full_name) LIKE ?
+                ORDER BY is_active DESC, length(nickname) ASC
+                LIMIT 1
+                """,
+                (f"{key}%", f"%{key}%"),
             ).fetchone()
     return dict(row) if row else None
+
+
+def mark_miss(player_key: str) -> None:
+    if player_key:
+        meta_set(f"miss:{player_key}", now())
+
+
+def is_miss(player_key: str, hours: float = 24) -> bool:
+    raw = meta_get(f"miss:{player_key}")
+    if not raw:
+        return False
+    try:
+        ts = datetime.fromisoformat(raw)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    return (datetime.now(timezone.utc) - ts).total_seconds() < hours * 3600
+
+
+def clear_miss(player_key: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM bdl_meta WHERE k = ?", (f"miss:{player_key}",))
+
+
+def want_hydrate(player_key: str) -> None:
+    if player_key:
+        meta_set(f"hydrate:{player_key}", "1")
+
+
+def pop_hydrate(player_key: str) -> bool:
+    flag = meta_get(f"hydrate:{player_key}")
+    if flag:
+        with _connect() as conn:
+            conn.execute("DELETE FROM bdl_meta WHERE k = ?", (f"hydrate:{player_key}",))
+    return bool(flag)
 
 
 def search_players(query: str, limit: int = 30) -> list[dict]:

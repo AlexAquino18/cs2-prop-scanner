@@ -1,8 +1,7 @@
 """Player / matchup payloads from the local BallDontLie database."""
 from __future__ import annotations
 
-from normalize import normalize_player_name
-from teams import team_key, split_matchup
+from teams import split_matchup
 import bdl_sync
 import statsdb
 
@@ -59,7 +58,70 @@ def _stat_value(row: dict, stat_key: str) -> float | None:
     return None if kills is None else float(kills)
 
 
-def _series_sums(map_rows: list[dict], stat_key: str, maps_n: int | None, team_id: int | None) -> list[dict]:
+def _vs(value: float | None, line: float | None) -> str | None:
+    if value is None or line is None:
+        return None
+    if value > line:
+        return "over"
+    if value < line:
+        return "under"
+    return "push"
+
+
+def _sample(
+    row: dict,
+    value: float,
+    maps: str,
+    team_id: int | None,
+    line: float | None,
+) -> dict:
+    return {
+        "start": row.get("start_time"),
+        "opponent": _opp(row, team_id),
+        "maps": maps,
+        "value": value,
+        "kills": row.get("kills"),
+        "deaths": row.get("deaths"),
+        "adr": row.get("adr"),
+        "hs_pct": row.get("hs_pct"),
+        "first_kills": row.get("first_kills"),
+        "rating": row.get("rating"),
+        "vs": _vs(value, line),
+    }
+
+
+def _map_samples(
+    map_rows: list[dict],
+    stat_key: str,
+    team_id: int | None,
+    line: float | None,
+    map_number: int | None = None,
+    limit: int = 10,
+) -> list[dict]:
+    out = []
+    for row in map_rows:
+        if map_number is not None and row.get("map_number") != map_number:
+            continue
+        val = _stat_value(row, stat_key)
+        if val is None:
+            continue
+        label = map_label(row.get("map_name"))
+        num = row.get("map_number")
+        maps = f"{label} · M{num}" if num else label
+        out.append(_sample(row, val, maps, team_id, line))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _series_sums(
+    map_rows: list[dict],
+    stat_key: str,
+    maps_n: int | None,
+    team_id: int | None,
+    line: float | None = None,
+    complete_only: bool = True,
+) -> list[dict]:
     by_match = []
     current = None
     for row in map_rows:
@@ -73,21 +135,66 @@ def _series_sums(map_rows: list[dict], stat_key: str, maps_n: int | None, team_i
         maps = sorted(series["maps"], key=lambda m: m.get("map_number") or 0)
         if maps_n:
             maps = [m for m in maps if (m.get("map_number") or 0) <= maps_n]
+        if complete_only and maps_n and len(maps) < maps_n:
+            continue
         if not maps:
             continue
         vals = [_stat_value(m, stat_key) for m in maps]
         if any(v is None for v in vals):
             continue
         first = maps[0]
+        label = ", ".join(map_label(m.get("map_name")) for m in maps)
+        row = _sample(first, round(sum(vals), 1), label, team_id, line)
+        row["kills"] = sum(m.get("kills") or 0 for m in maps)
+        row["deaths"] = sum(m.get("deaths") or 0 for m in maps)
+        row["adr"] = round(sum((m.get("adr") or 0) for m in maps) / len(maps), 1)
+        row["hs_pct"] = round(sum((m.get("hs_pct") or 0) for m in maps) / len(maps), 1)
+        out.append(row)
+    return out
+
+
+def _match_samples(
+    matches: list[dict],
+    stat_key: str,
+    team_id: int | None,
+    line: float | None,
+    limit: int = 10,
+) -> list[dict]:
+    out = []
+    for row in matches:
+        val = _stat_value(row, stat_key)
+        if val is None:
+            continue
+        maps = f"BO{row.get('best_of') or '?'}"
+        out.append(_sample(row, val, maps, team_id, line))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _stat_title(stat_key: str, token: str) -> str:
+    pretty = (stat_key or "stat").replace("_", " ")
+    if token == "1":
+        return f"{pretty} · map 1"
+    if token in {"1-2", "1-3"}:
+        return f"{pretty} · maps {token}"
+    return f"{pretty} · series"
+
+
+def _pool_payload(pool: list[dict]) -> list[dict]:
+    out = []
+    for p in pool[:8]:
+        rate = p.get("win_rate") or 0
+        if rate <= 1:
+            rate = rate * 100
         out.append(
             {
-                "start": first.get("start_time"),
-                "opponent": _opp(first, team_id),
-                "maps": ", ".join(map_label(m.get("map_name")) for m in maps),
-                "value": round(sum(vals), 1),
-                "kills": sum(m.get("kills") or 0 for m in maps),
-                "adr": round(sum((m.get("adr") or 0) for m in maps) / len(maps), 1),
-                "hs_pct": round(sum((m.get("hs_pct") or 0) for m in maps) / len(maps), 1),
+                "map": p["map_name"],
+                "label": map_label(p["map_name"]),
+                "played": p["matches_played"],
+                "wins": p["wins"],
+                "losses": p["losses"],
+                "win_rate": round(rate),
             }
         )
     return out
@@ -100,91 +207,77 @@ def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", l
         return {
             "ok": False,
             "queued": queued,
+            "status": "loading" if queued else "missing",
             "message": err or "Player not found.",
             "player": name,
+            "stat": _stat_title(stat_key, map_range or "full"),
+            "line": line,
+            "recent": [],
+            "maps": [],
         }
     maps = statsdb.player_map_rows(player["id"], limit=12)
     matches = statsdb.player_match_rows(player["id"], limit=10)
     token = map_range or "full"
+    note = None
+    grain = "map"
     if token == "1":
-        samples = []
-        for row in maps:
-            if row.get("map_number") != 1:
-                continue
-            val = _stat_value(row, stat_key)
-            if val is None:
-                continue
-            samples.append(
-                {
-                    "start": row.get("start_time"),
-                    "opponent": _opp(row, player.get("team_id")),
-                    "maps": map_label(row.get("map_name")),
-                    "value": val,
-                    "kills": row.get("kills"),
-                    "deaths": row.get("deaths"),
-                    "adr": row.get("adr"),
-                    "hs_pct": row.get("hs_pct"),
-                    "first_kills": row.get("first_kills"),
-                    "rating": row.get("rating"),
-                }
-            )
-        samples = samples[:10]
-        label = f"{stat_key} map 1"
+        samples = _map_samples(maps, stat_key, player.get("team_id"), line, map_number=1)
+        if not samples:
+            samples = _map_samples(maps, stat_key, player.get("team_id"), line)
+            if samples:
+                note = "Map 1 splits are still loading — showing recent maps."
     elif token in {"1-2", "1-3"}:
         n = 2 if token == "1-2" else 3
-        samples = _series_sums(maps, stat_key, n, player.get("team_id"))[:10]
-        label = f"{stat_key} maps {token}"
+        samples = _series_sums(maps, stat_key, n, player.get("team_id"), line, complete_only=True)
+        grain = "series"
+        if not samples:
+            samples = _map_samples(maps, stat_key, player.get("team_id"), line)
+            grain = "map"
+            if samples:
+                note = "Full series totals are still loading — showing individual maps."
+        if not samples:
+            samples = _match_samples(matches, stat_key, player.get("team_id"), line)
+            grain = "series"
+            if samples:
+                note = "Map splits are still loading — showing series totals."
     else:
-        samples = []
-        for row in matches:
-            val = _stat_value(row, stat_key)
-            if val is None:
-                continue
-            samples.append(
-                {
-                    "start": row.get("start_time"),
-                    "opponent": _opp(row, player.get("team_id")),
-                    "maps": f"BO{row.get('best_of') or '?'}",
-                    "value": val,
-                    "kills": row.get("kills"),
-                    "adr": row.get("adr"),
-                    "hs_pct": row.get("hs_pct"),
-                }
-            )
-        label = f"{stat_key} series"
+        samples = _match_samples(matches, stat_key, player.get("team_id"), line)
+        grain = "series"
+        if not samples:
+            samples = _map_samples(maps, stat_key, player.get("team_id"), line)
+            grain = "map"
     hits = None
     if line is not None and samples:
-        overs = sum(1 for s in samples if s["value"] > line)
-        hits = {"line": line, "overs": overs, "n": len(samples), "pct": round(100 * overs / len(samples))}
+        overs = sum(1 for s in samples if s["vs"] == "over")
+        hits = {
+            "line": line,
+            "overs": overs,
+            "n": len(samples),
+            "pct": round(100 * overs / len(samples)),
+        }
     avg = round(sum(s["value"] for s in samples) / len(samples), 1) if samples else None
     rank = statsdb.team_rank(player.get("team_id"))
     pool = statsdb.map_pool(player["team_id"]) if player.get("team_id") else []
-    if not samples:
-        bdl_sync.prioritize_names([player.get("nickname") or name], [player.get("team_name") or ""], priority=10)
+    syncing = not samples
+    if syncing:
+        note = note or "Pulling recent maps. This usually takes under a minute."
     return {
         "ok": True,
-        "queued": not samples,
+        "queued": syncing,
+        "status": "ready" if samples else "loading",
         "player": player["nickname"],
         "full_name": player.get("full_name"),
         "team": player.get("team_name"),
         "age": player.get("age"),
         "rank": rank.get("rank") if rank else None,
-        "stat": label,
+        "stat": _stat_title(stat_key, token),
+        "grain": grain,
+        "line": line,
         "avg": avg,
         "hits": hits,
-        "maps": [
-            {
-                "map": p["map_name"],
-                "label": map_label(p["map_name"]),
-                "played": p["matches_played"],
-                "wins": p["wins"],
-                "losses": p["losses"],
-                "win_rate": round((p["win_rate"] or 0) * (100 if (p["win_rate"] or 0) <= 1 else 1)),
-            }
-            for p in pool[:8]
-        ],
+        "maps": _pool_payload(pool),
         "recent": samples,
-        "message": None if samples else "Pulling recent maps from BallDontLie. Trial is 5 requests/min, so this can take about a minute.",
+        "message": note,
     }
 
 
@@ -192,40 +285,34 @@ def matchup_profile(label: str) -> dict:
     statsdb.init_db()
     sides = split_matchup(label)
     if len(sides) < 2:
-        return {"ok": False, "message": "Need two teams."}
+        return {"ok": False, "queued": False, "message": "Need two teams.", "teams": []}
     teams = []
     missing = []
     for name in sides[:2]:
-        row = statsdb.find_team(name, team_key)
+        row, queued = bdl_sync.lookup_or_fetch_team(name)
         if not row:
             missing.append(name)
-            bdl_sync.prioritize_names([], [name], priority=10)
-            teams.append({"name": name, "rank": None, "maps": []})
+            teams.append({"name": name, "rank": None, "maps": [], "queued": queued})
             continue
         rank = statsdb.team_rank(row["id"])
         pool = statsdb.map_pool(row["id"])
         if not pool:
-            bdl_sync.prioritize_names([], [name], priority=10)
+            missing.append(row.get("name") or name)
+            bdl_sync.prioritize_names([], [name], priority=8)
         teams.append(
             {
                 "name": row["name"],
                 "rank": rank.get("rank") if rank else None,
-                "maps": [
-                    {
-                        "label": map_label(p["map_name"]),
-                        "played": p["matches_played"],
-                        "wins": p["wins"],
-                        "losses": p["losses"],
-                        "win_rate": round((p["win_rate"] or 0) * (100 if (p["win_rate"] or 0) <= 1 else 1)),
-                    }
-                    for p in pool[:8]
-                ],
+                "maps": _pool_payload(pool),
+                "queued": not pool,
             }
         )
+    loading = any(t.get("queued") for t in teams)
     return {
         "ok": True,
         "label": " vs ".join(t["name"] for t in teams),
         "teams": teams,
-        "queued": bool(missing),
-        "message": f"Queued {', '.join(missing)}" if missing else None,
+        "queued": loading,
+        "status": "loading" if loading else "ready",
+        "message": "Loading map pools…" if loading else None,
     }

@@ -30,41 +30,78 @@ def lookup_or_fetch_player(name: str) -> tuple[dict | None, str | None, bool]:
     statsdb.init_db()
     key = normalize_player_name(name)
     hit = statsdb.find_player(key)
+    if hit:
+        statsdb.clear_miss(key)
+        statsdb.pop_hydrate(key)
+        _kick_hydrate(hit)
+        return hit, None, False
+    if statsdb.is_miss(key):
+        return None, f"No stats listing for {name}. A lot of T3 and mixer names are not in this database.", False
+    if not bdl.enabled():
+        return None, "Player stats are not connected on this server.", False
+    statsdb.want_hydrate(key)
+    got = _LOCK.acquire(timeout=0.8)
+    if not got:
+        statsdb.enqueue("player_search", {"q": name}, priority=5)
+        return None, "Looking this player up…", True
+    try:
+        data = bdl.get("/players", [("search", name), ("per_page", "25")], wait_budget=0.3)
+    except (bdl.BdlBusy, bdl.BdlError, Exception):
+        statsdb.enqueue("player_search", {"q": name}, priority=5)
+        return None, "Looking this player up…", True
+    finally:
+        _LOCK.release()
+    hit = _ingest_search_rows(name, data.get("data") or [])
     if not hit:
-        if not bdl.enabled():
-            return None, "BallDontLie key is not loaded. Add BALLDONTLIE_API_KEY and restart the app.", False
-        got = _LOCK.acquire(timeout=1.0)
-        if not got:
-            statsdb.enqueue("player_search", {"q": name}, priority=5)
-            return None, "Waiting on the BallDontLie rate limit, then fetching this player.", True
-        try:
-            data = bdl.get("/players", [("search", name), ("per_page", "25")], wait_budget=0.4)
-        except (bdl.BdlBusy, bdl.BdlError, Exception):
-            statsdb.enqueue("player_search", {"q": name}, priority=5)
-            return None, "Waiting on the BallDontLie rate limit, then fetching this player.", True
-        finally:
-            _LOCK.release()
-        rows = data.get("data") or []
-        statsdb.upsert_players(rows, normalize_player_name)
-        hit = statsdb.find_player(key)
-        if not hit:
-            best = None
-            best_score = 0.0
-            for row in rows:
-                nick = row.get("nickname") or ""
-                score = SequenceMatcher(None, key, normalize_player_name(nick)).ratio()
-                if score > best_score:
-                    best, best_score = row, score
-            if best and best_score >= 0.72:
-                hit = statsdb.find_player(normalize_player_name(best.get("nickname") or ""))
-        if not hit:
-            return None, f"BallDontLie has no player named {name}. A lot of T3 mixers are not in that database.", False
+        statsdb.mark_miss(key)
+        return None, f"No stats listing for {name}. A lot of T3 and mixer names are not in this database.", False
+    statsdb.clear_miss(key)
+    statsdb.pop_hydrate(key)
     _kick_hydrate(hit)
     return hit, None, False
 
 
+def lookup_or_fetch_team(name: str) -> tuple[dict | None, bool]:
+    statsdb.init_db()
+    hit = statsdb.find_team(name, team_key)
+    if hit:
+        if hit.get("id"):
+            if not statsdb.map_pool(hit["id"]):
+                statsdb.enqueue("map_pool", {"team_id": hit["id"]}, priority=8)
+        return hit, False
+    statsdb.enqueue("team_by_key", {"team": name, "key": team_key(name)}, priority=8)
+    return None, True
+
+
+def _best_search_hit(query: str, rows: list[dict]) -> dict | None:
+    key = normalize_player_name(query)
+    if not key:
+        return None
+    hit = statsdb.find_player(key)
+    if hit:
+        return hit
+    best = None
+    best_score = 0.0
+    for row in rows:
+        nick = row.get("nickname") or ""
+        score = SequenceMatcher(None, key, normalize_player_name(nick)).ratio()
+        if score > best_score:
+            best, best_score = row, score
+    if best and best_score >= 0.72:
+        return statsdb.find_player(normalize_player_name(best.get("nickname") or ""))
+    return None
+
+
+def _ingest_search_rows(query: str, rows: list[dict]) -> dict | None:
+    statsdb.upsert_players(rows, normalize_player_name)
+    return _best_search_hit(query, rows)
+
+
 def _kick_hydrate(player: dict) -> None:
     pid = player.get("id")
+    team_id = player.get("team_id")
+    if team_id and not statsdb.map_pool(team_id):
+        statsdb.enqueue("map_pool", {"team_id": team_id}, priority=8)
     if not pid or pid in _HYDRATING:
         return
     if statsdb.player_map_rows(pid, limit=1):
@@ -95,12 +132,18 @@ def _hydrate_player(player: dict) -> None:
             try:
                 _STATE["last_job"] = _run_kind("team_matches", {"team_id": tid})
                 ids = statsdb.recent_final_match_ids(tid, 6)
+                for mid in statsdb.next_match_stats_ids_for_team(tid, 2):
+                    _STATE["last_job"] = _run_kind("match_stats", {"match_id": mid})
+                    if statsdb.player_match_rows(pid, limit=1):
+                        break
                 if ids:
                     _STATE["last_job"] = _run_kind("match_maps", {"ids": ids})
                 for mid in statsdb.unsynced_map_ids_for_matches(ids, 8):
                     _STATE["last_job"] = _run_kind("map_stats", {"match_map_id": mid})
                     if statsdb.player_map_rows(pid, limit=1):
                         break
+                if not statsdb.map_pool(tid):
+                    _STATE["last_job"] = _run_kind("map_pool", {"team_id": tid})
                 _STATE["last_error"] = None
             except Exception as exc:
                 _STATE["last_error"] = str(exc)
@@ -111,7 +154,7 @@ def _hydrate_player(player: dict) -> None:
             _HYDRATING.discard(pid)
 
 
-def prioritize_names(player_names: list[str], team_names: list[str], priority: int = 22) -> None:
+def prioritize_names(player_names: list[str], team_names: list[str], priority: int = 12) -> None:
     statsdb.init_db()
     for name in team_names:
         key = team_key(name)
@@ -124,10 +167,6 @@ def prioritize_names(player_names: list[str], team_names: list[str], priority: i
 
 def kick_catalog() -> None:
     statsdb.init_db()
-    if not statsdb.meta_get("players_done"):
-        statsdb.enqueue("players_page", {"cursor": statsdb.meta_get("players_cursor")}, priority=40)
-    if not statsdb.meta_get("teams_done"):
-        statsdb.enqueue("teams_page", {"cursor": statsdb.meta_get("teams_cursor")}, priority=41)
     rankings_at = statsdb.meta_get("rankings_at")
     if not rankings_at:
         statsdb.enqueue("rankings", {}, priority=30)
@@ -143,23 +182,21 @@ def _params(cursor: str | None, extra: list[tuple] | None = None) -> list[tuple]
 
 
 def _tick_job() -> str:
-    job = statsdb.pop_job(max_priority=10)
+    job = statsdb.pop_job(max_priority=15)
     if not job:
         mid = statsdb.next_map_stats_id()
         if mid:
             job = ("map_stats", {"match_map_id": mid})
         else:
-            job = statsdb.pop_job(max_priority=19)
-            if not job:
-                ids = statsdb.next_maps_job_ids()
-                if ids:
-                    job = ("match_maps", {"ids": ids})
+            ids = statsdb.next_maps_job_ids()
+            if ids:
+                job = ("match_maps", {"ids": ids})
+            else:
+                sid = statsdb.next_match_stats_id()
+                if sid:
+                    job = ("match_stats", {"match_id": sid})
                 else:
-                    sid = statsdb.next_match_stats_id()
-                    if sid:
-                        job = ("match_stats", {"match_id": sid})
-                    else:
-                        job = statsdb.pop_job()
+                    job = statsdb.pop_job()
     if not job:
         kick_catalog()
         job = statsdb.pop_job()
@@ -202,12 +239,14 @@ def _run_kind(kind: str, payload: dict) -> str:
         q = payload.get("q") or ""
         data = bdl.get("/players", [("search", q), ("per_page", "25")])
         rows = data.get("data") or []
-        statsdb.upsert_players(rows, normalize_player_name)
-        for row in rows:
-            team = row.get("team") or {}
-            if team.get("id"):
-                statsdb.enqueue("team_matches", {"team_id": team["id"]}, priority=18)
-                statsdb.enqueue("map_pool", {"team_id": team["id"]}, priority=25)
+        hit = _ingest_search_rows(q, rows)
+        key = normalize_player_name(q)
+        if hit:
+            statsdb.clear_miss(key)
+            if statsdb.pop_hydrate(key):
+                _kick_hydrate(hit)
+        elif not rows:
+            statsdb.mark_miss(key)
         return f"search {q} +{len(rows)}"
     if kind == "team_by_key":
         name = payload.get("team") or ""
@@ -216,8 +255,7 @@ def _run_kind(kind: str, payload: dict) -> str:
         statsdb.upsert_teams(rows, team_key)
         hit = statsdb.find_team(name, team_key)
         if hit:
-            statsdb.enqueue("team_matches", {"team_id": hit["id"]}, priority=18)
-            statsdb.enqueue("map_pool", {"team_id": hit["id"]}, priority=25)
+            statsdb.enqueue("map_pool", {"team_id": hit["id"]}, priority=8)
         return f"team {name}"
     if kind == "team_matches":
         tid = payload["team_id"]
@@ -290,5 +328,7 @@ def loop() -> None:
 def start_background() -> None:
     if not bdl.enabled():
         return
+    statsdb.init_db()
+    statsdb.drop_jobs("players_page", "teams_page")
     t = threading.Thread(target=loop, daemon=True, name="bdl-sync")
     t.start()
