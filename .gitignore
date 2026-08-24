@@ -1,5 +1,7 @@
 data/
 seed/*.tmp.db
+seed/*.db-wal
+seed/*.db-shm
 __pycache__/
 *.pyc
 .env
