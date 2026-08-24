@@ -11,6 +11,7 @@ from teams import team_key
 import statsdb
 
 MAPS_TARGET = 12
+MATCHES_TARGET = 15
 STALE_HOURS = 20
 POOL_STALE_HOURS = 24 * 7
 
@@ -239,7 +240,7 @@ def _refresh_team(payload: dict) -> str:
         _continue(nxt)
         return f"matches {tid}"
     nxt["did_matches"] = True
-    ids = statsdb.recent_final_match_ids(tid, 8)
+    ids = statsdb.recent_final_match_ids(tid, MATCHES_TARGET)
     missing_maps = statsdb.matches_missing_map_rows(ids)
     if missing_maps:
         _run_kind("match_maps", {"ids": missing_maps})
@@ -365,7 +366,7 @@ def _run_kind(kind: str, payload: dict) -> str:
         data = bdl.get("/matches", [("team_ids[]", tid), ("per_page", "25")])
         rows = data.get("data") or []
         statsdb.upsert_matches(rows)
-        ids = [r["id"] for r in rows if r.get("status_state") == "final"][:8]
+        ids = [r["id"] for r in rows if r.get("status_state") == "final"][:MATCHES_TARGET]
         if ids:
             statsdb.enqueue("match_maps", {"ids": ids}, priority=6)
         return f"matches team {tid} +{len(rows)}"

@@ -84,6 +84,14 @@ def _vs(value: float | None, line: float | None) -> str | None:
     return "push"
 
 
+def _short_opp(name: str | None) -> str:
+    raw = (name or "—").strip()
+    if " vs " in raw:
+        return "—"
+    token = raw.split()[0] if raw else "—"
+    return token[:10]
+
+
 def _sample(
     row: dict,
     value: float,
@@ -92,13 +100,16 @@ def _sample(
     line: float | None,
     team_name: str | None = None,
 ) -> dict:
+    opponent = _opp(row, team_id, team_name)
     return {
         "start": row.get("start_time"),
-        "opponent": _opp(row, team_id, team_name),
+        "opponent": opponent,
+        "opp": _short_opp(opponent),
         "maps": maps,
         "value": value,
         "kills": row.get("kills"),
         "deaths": row.get("deaths"),
+        "assists": row.get("assists"),
         "adr": row.get("adr"),
         "hs_pct": row.get("hs_pct"),
         "first_kills": row.get("first_kills"),
@@ -166,9 +177,13 @@ def _series_sums(
         row = _sample(first, round(sum(vals), 1), label, team_id, line, team_name)
         row["kills"] = sum(m.get("kills") or 0 for m in maps)
         row["deaths"] = sum(m.get("deaths") or 0 for m in maps)
+        row["assists"] = sum(m.get("assists") or 0 for m in maps)
+        row["first_kills"] = sum(m.get("first_kills") or 0 for m in maps)
         row["adr"] = round(sum((m.get("adr") or 0) for m in maps) / len(maps), 1)
         row["hs_pct"] = round(sum((m.get("hs_pct") or 0) for m in maps) / len(maps), 1)
         out.append(row)
+        if len(out) >= 10:
+            break
     return out
 
 
@@ -199,6 +214,19 @@ def _stat_title(stat_key: str, token: str) -> str:
     if token in {"1-2", "1-3"}:
         return f"{pretty} · maps {token}"
     return f"{pretty} · series"
+
+
+def _hit_rate(samples: list[dict], line: float | None, n: int | None = None) -> dict | None:
+    chunk = samples[:n] if n else samples
+    if line is None or not chunk:
+        return None
+    overs = sum(1 for s in chunk if s.get("vs") == "over")
+    return {
+        "line": line,
+        "overs": overs,
+        "n": len(chunk),
+        "pct": round(100 * overs / len(chunk)),
+    }
 
 
 def _pool_payload(pool: list[dict]) -> list[dict]:
@@ -245,7 +273,7 @@ def player_profile(
     matches = statsdb.player_match_rows(player["id"], limit=10)
     token = map_range or "full"
     note = None
-    grain = "map"
+    grain = "game"
     side_name = player.get("team_name") or team
     side_id = player.get("team_id")
     if not side_id and side_name:
@@ -253,37 +281,27 @@ def player_profile(
         if hit:
             side_id = hit["id"]
     if token == "1":
-        samples = _map_samples(maps, stat_key, side_id, line, team_name=side_name)
-        grain = "map"
+        samples = _map_samples(maps, stat_key, side_id, line, map_number=1, team_name=side_name)
     elif token in {"1-2", "1-3"}:
         n = 2 if token == "1-2" else 3
         samples = _series_sums(maps, stat_key, n, side_id, line, complete_only=True, team_name=side_name)
         grain = "series"
-        if not samples:
-            samples = _map_samples(maps, stat_key, side_id, line, team_name=side_name)
-            grain = "map"
-            if samples:
-                note = "Full series totals are still loading — showing individual maps."
-        if not samples:
-            samples = _match_samples(matches, stat_key, side_id, line, team_name=side_name)
-            grain = "series"
-            if samples:
-                note = "Map splits are still loading — showing series totals."
     else:
-        samples = _match_samples(matches, stat_key, side_id, line, team_name=side_name)
+        samples = _series_sums(maps, stat_key, None, side_id, line, complete_only=False, team_name=side_name)
         grain = "series"
         if not samples:
-            samples = _map_samples(maps, stat_key, side_id, line, team_name=side_name)
-            grain = "map"
-    hits = None
-    if line is not None and samples:
-        overs = sum(1 for s in samples if s["vs"] == "over")
-        hits = {
-            "line": line,
-            "overs": overs,
-            "n": len(samples),
-            "pct": round(100 * overs / len(samples)),
-        }
+            samples = _match_samples(matches, stat_key, side_id, line, team_name=side_name)
+    target = 10
+    match_ids = statsdb.recent_final_match_ids(side_id, 15) if side_id else []
+    unsynced = len(statsdb.unsynced_map_ids_for_matches(match_ids, 99)) if match_ids else 0
+    filling = (side_id and not match_ids) or (unsynced > 0 and len(samples) < target)
+    if filling:
+        note = (
+            f"Loaded {len(samples)} of last {target} games — filling the rest…"
+            if samples
+            else "Pulling last 10 games…"
+        )
+    hits = _hit_rate(samples, line)
     avg = round(sum(s["value"] for s in samples) / len(samples), 1) if samples else None
     rank = statsdb.team_rank(side_id)
     pool = statsdb.map_pool(side_id) if side_id else []
@@ -291,12 +309,10 @@ def player_profile(
     if side_id:
         cached_at = statsdb.meta_get(f"ready_at:{side_id}") or statsdb.meta_get(f"pool_at:{side_id}")
     cached_at = cached_at or statsdb.meta_get("last_daily")
-    if not samples:
-        note = note or "Pulling last 10 maps…"
     return {
         "ok": True,
-        "queued": not samples,
-        "status": "ready" if samples else "loading",
+        "queued": filling,
+        "status": "ready" if samples and not filling else "loading",
         "player": player["nickname"],
         "full_name": player.get("full_name"),
         "team": side_name or player.get("team_name"),
@@ -307,8 +323,10 @@ def player_profile(
         "line": line,
         "avg": avg,
         "hits": hits,
+        "l5": _hit_rate(samples, line, 5),
+        "l10": _hit_rate(samples, line, 10),
         "maps": _pool_payload(pool),
-        "recent": samples,
+        "recent": samples[:target],
         "cached_at": cached_at,
         "message": note,
     }
