@@ -249,6 +249,12 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
     matches = []
     for key, bucket in buckets.items():
         sample = bucket["gaps"][0]
+        names = []
+        for gap in bucket["gaps"]:
+            team_name = (gap.get("team") or "").strip()
+            if team_name and team_name not in names:
+                names.append(team_name)
+        bucket["sides"] = names[:2]
         bucket["label"] = _match_label(sample["matchup"], sample["team"], bucket["series"])
         for gap in bucket["gaps"]:
             gap.pop("group", None)

@@ -200,9 +200,15 @@ def _pool_payload(pool: list[dict]) -> list[dict]:
     return out
 
 
-def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", line: float | None = None) -> dict:
+def player_profile(
+    name: str,
+    stat_key: str = "kills",
+    map_range: str = "1-2",
+    line: float | None = None,
+    team: str | None = None,
+) -> dict:
     statsdb.init_db()
-    player, err, queued = bdl_sync.lookup_or_fetch_player(name)
+    player, err, queued = bdl_sync.lookup_or_fetch_player(name, team=team)
     if not player:
         return {
             "ok": False,
@@ -265,11 +271,11 @@ def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", l
         )
     cached_at = cached_at or statsdb.meta_get("last_daily")
     if not samples:
-        note = note or "Not in today's snapshot yet. Last 10 maps and map pools refresh daily."
+        note = note or "Pulling last 10 maps…"
     return {
         "ok": True,
-        "queued": False,
-        "status": "ready" if samples else "empty",
+        "queued": not samples,
+        "status": "ready" if samples else "loading",
         "player": player["nickname"],
         "full_name": player.get("full_name"),
         "team": player.get("team_name"),
@@ -287,9 +293,11 @@ def player_profile(name: str, stat_key: str = "kills", map_range: str = "1-2", l
     }
 
 
-def matchup_profile(label: str) -> dict:
+def matchup_profile(label: str, sides_text: str | None = None) -> dict:
     statsdb.init_db()
-    sides = split_matchup(label)
+    sides = [p.strip() for p in (sides_text or "").split("|") if p.strip()]
+    if len(sides) < 2:
+        sides = split_matchup(label)
     if len(sides) < 2:
         return {"ok": False, "queued": False, "message": "Need two teams.", "teams": []}
     teams = []
@@ -313,7 +321,7 @@ def matchup_profile(label: str) -> dict:
         "ok": True,
         "label": " vs ".join(t["name"] for t in teams),
         "teams": teams,
-        "queued": False,
-        "status": "ready" if not empty else "empty",
-        "message": "Map pools refresh daily in the background." if empty else None,
+        "queued": bool(empty),
+        "status": "ready" if not empty else "loading",
+        "message": "Pulling map pools…" if empty else None,
     }

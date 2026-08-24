@@ -142,8 +142,9 @@ def api_player(
     stat: str = Query(default="kills"),
     map: str = Query(default="1-2"),
     line: float | None = Query(default=None),
+    team: str | None = Query(default=None),
 ):
-    return profiles.player_profile(name, stat_key=stat, map_range=map, line=line)
+    return profiles.player_profile(name, stat_key=stat, map_range=map, line=line, team=team)
 
 
 @app.get("/api/players")
@@ -153,8 +154,8 @@ def api_players(q: str = Query(default="")):
 
 
 @app.get("/api/matchup")
-def api_matchup(label: str = Query(...)):
-    return profiles.matchup_profile(label)
+def api_matchup(label: str = Query(...), sides: str | None = Query(default=None)):
+    return profiles.matchup_profile(label, sides_text=sides)
 
 
 @app.post("/api/refresh")

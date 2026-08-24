@@ -32,19 +32,52 @@ def status() -> dict:
     return out
 
 
-def lookup_or_fetch_player(name: str) -> tuple[dict | None, str | None, bool]:
-    """SQLite only. Background jobs fill stats daily."""
+def _boost_team(name: str | None, team_id: int | None = None) -> None:
+    if not name and not team_id:
+        return
+    payload = {"team": name or ""}
+    if team_id:
+        payload["team_id"] = team_id
+    statsdb.enqueue("team_refresh", payload, priority=2)
+
+
+def lookup_or_fetch_player(name: str, team: str | None = None) -> tuple[dict | None, str | None, bool]:
+    """Read SQLite first. If the name is missing, search now (or jump the queue)."""
     statsdb.init_db()
     key = normalize_player_name(name)
     hit = statsdb.find_player(key)
     if hit:
+        if not statsdb.player_map_rows(hit["id"], limit=1):
+            _boost_team(hit.get("team_name") or team, hit.get("team_id"))
         return hit, None, False
     if statsdb.is_miss(key):
         return None, f"No stats listing for {name}. A lot of T3 and mixer names are not in this database.", False
     if not bdl.enabled():
         return None, "Player stats are not connected on this server.", False
-    statsdb.enqueue("player_search", {"q": name}, priority=16)
-    return None, "Not in the daily stats snapshot yet.", True
+    if team:
+        _boost_team(team)
+    flag = f"searching:{key}"
+    if not statsdb.meta_get(flag):
+        statsdb.meta_set(flag, datetime.now(timezone.utc).isoformat())
+        try:
+            data = bdl.get("/players", [("search", name), ("per_page", "25")], wait_budget=0.4)
+            rows = data.get("data") or []
+            hit = _ingest_search_rows(name, rows)
+            if hit:
+                statsdb.clear_miss(key)
+                statsdb.meta_delete(flag)
+                _boost_team(hit.get("team_name") or team, hit.get("team_id"))
+                return hit, None, False
+            if not rows:
+                statsdb.mark_miss(key)
+                statsdb.meta_delete(flag)
+                return None, f"No stats listing for {name}. A lot of T3 and mixer names are not in this database.", False
+        except (bdl.BdlBusy, bdl.BdlError):
+            pass
+        except Exception:
+            pass
+    statsdb.enqueue("player_search", {"q": name}, priority=1)
+    return None, "Looking this player up…", True
 
 
 def lookup_or_fetch_team(name: str) -> tuple[dict | None, bool]:
@@ -52,9 +85,26 @@ def lookup_or_fetch_team(name: str) -> tuple[dict | None, bool]:
     hit = statsdb.find_team(name, team_key)
     if hit:
         if not statsdb.map_pool(hit["id"]):
-            statsdb.enqueue("team_refresh", {"team": name, "team_id": hit["id"]}, priority=12)
+            _boost_team(name, hit["id"])
         return hit, False
-    statsdb.enqueue("team_refresh", {"team": name}, priority=12)
+    if not bdl.enabled():
+        return None, False
+    flag = f"tsearch:{team_key(name) or name.lower()}"
+    if not statsdb.meta_get(flag):
+        statsdb.meta_set(flag, datetime.now(timezone.utc).isoformat())
+        try:
+            data = bdl.get("/teams", [("search", name), ("per_page", "25")], wait_budget=0.4)
+            statsdb.upsert_teams(data.get("data") or [], team_key)
+            hit = statsdb.find_team(name, team_key)
+            if hit:
+                statsdb.meta_delete(flag)
+                _boost_team(name, hit["id"])
+                return hit, False
+        except (bdl.BdlBusy, bdl.BdlError):
+            pass
+        except Exception:
+            pass
+    _boost_team(name)
     return None, True
 
 
@@ -93,13 +143,13 @@ def schedule_board(player_names: list[str], team_names: list[str], force: bool =
         statsdb.enqueue("team_refresh", {"team": name}, priority=8)
     missing = 0
     for name in player_names:
-        if missing >= 25:
+        if missing >= 40:
             break
         if not name:
             continue
         if statsdb.find_player(normalize_player_name(name)):
             continue
-        statsdb.enqueue("player_search", {"q": name}, priority=16)
+        statsdb.enqueue("player_search", {"q": name}, priority=11)
         missing += 1
 
 
@@ -134,7 +184,7 @@ def _board_names() -> tuple[list[str], list[str]]:
 
 
 def _continue(payload: dict) -> None:
-    statsdb.enqueue("team_refresh", payload, priority=8)
+    statsdb.enqueue("team_refresh", payload, priority=2)
 
 
 def _refresh_team(payload: dict) -> str:
@@ -160,15 +210,10 @@ def _refresh_team(payload: dict) -> str:
         return f"team search {name}"
     tid = hit["id"]
     nxt = {"team": name or hit.get("name"), "team_id": tid, "force": bool(force)}
+    if force:
+        nxt["need_pool"] = True
     pool_key = f"pool_at:{tid}"
     match_key = f"matches_at:{tid}"
-    if not payload.get("did_pool") and (force or not statsdb.map_pool(tid) or statsdb.is_stale(pool_key, STALE_HOURS)):
-        _run_kind("map_pool", {"team_id": tid})
-        statsdb.meta_set(pool_key, datetime.now(timezone.utc).isoformat())
-        nxt["did_pool"] = True
-        _continue(nxt)
-        return f"pool {tid}"
-    nxt["did_pool"] = True
     if not payload.get("did_matches") and (
         force or not statsdb.recent_final_match_ids(tid, 1) or statsdb.is_stale(match_key, STALE_HOURS)
     ):
@@ -193,6 +238,14 @@ def _refresh_team(payload: dict) -> str:
             _run_kind("map_stats", {"match_map_id": nxt_ids[0]})
             _continue(nxt)
             return f"map stats {tid} {have + 1}/{MAPS_TARGET}"
+    need_pool = payload.get("need_pool") or not payload.get("did_pool")
+    if need_pool and (not statsdb.map_pool(tid) or statsdb.is_stale(pool_key, STALE_HOURS) or payload.get("need_pool")):
+        _run_kind("map_pool", {"team_id": tid})
+        statsdb.meta_set(pool_key, datetime.now(timezone.utc).isoformat())
+        nxt["did_pool"] = True
+        nxt["need_pool"] = False
+        _continue(nxt)
+        return f"pool {tid}"
     statsdb.meta_set(f"ready_at:{tid}", datetime.now(timezone.utc).isoformat())
     return f"ready {name or tid} maps={have}"
 
@@ -214,21 +267,7 @@ def _params(cursor: str | None, extra: list[tuple] | None = None) -> list[tuple]
 
 
 def _tick_job() -> str:
-    job = statsdb.pop_job(max_priority=15)
-    if not job:
-        mid = statsdb.next_map_stats_id()
-        if mid:
-            job = ("map_stats", {"match_map_id": mid})
-        else:
-            ids = statsdb.next_maps_job_ids()
-            if ids:
-                job = ("match_maps", {"ids": ids})
-            else:
-                sid = statsdb.next_match_stats_id()
-                if sid:
-                    job = ("match_stats", {"match_id": sid})
-                else:
-                    job = statsdb.pop_job()
+    job = statsdb.pop_job()
     if not job:
         kick_catalog()
         job = statsdb.pop_job()
@@ -277,15 +316,17 @@ def _run_kind(kind: str, payload: dict) -> str:
         key = normalize_player_name(q)
         if hit:
             statsdb.clear_miss(key)
+            statsdb.meta_delete(f"searching:{key}")
             tid = hit.get("team_id")
             if tid:
                 statsdb.enqueue(
                     "team_refresh",
                     {"team": hit.get("team_name") or q, "team_id": tid},
-                    priority=10,
+                    priority=2,
                 )
         elif not rows:
             statsdb.mark_miss(key)
+            statsdb.meta_delete(f"searching:{key}")
         return f"search {q} +{len(rows)}"
     if kind == "team_by_key":
         name = payload.get("team") or ""
@@ -370,7 +411,8 @@ def start_background() -> None:
     if not bdl.enabled():
         return
     statsdb.init_db()
-    statsdb.drop_jobs("players_page", "teams_page")
+    statsdb.drop_jobs("players_page", "teams_page", "team_by_key")
+    statsdb.drop_jobs_from("player_search", 4)
     if statsdb.is_stale("last_daily", STALE_HOURS):
         daily_refresh()
     t = threading.Thread(target=loop, daemon=True, name="bdl-sync")

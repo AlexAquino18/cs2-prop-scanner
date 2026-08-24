@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 
 from store import _connect, init_db as init_line_db
@@ -141,6 +142,11 @@ def meta_set(key: str, value: str) -> None:
         )
 
 
+def meta_delete(key: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM bdl_meta WHERE k = ?", (key,))
+
+
 def enqueue(kind: str, payload: dict, priority: int = 50) -> None:
     blob = json.dumps(payload, sort_keys=True)
     with _connect() as conn:
@@ -167,6 +173,14 @@ def drop_jobs(*kinds: str) -> None:
     placeholders = ",".join("?" * len(kinds))
     with _connect() as conn:
         conn.execute(f"DELETE FROM bdl_jobs WHERE kind IN ({placeholders})", kinds)
+
+
+def drop_jobs_from(kind: str, min_priority: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM bdl_jobs WHERE kind = ? AND priority >= ?",
+            (kind, min_priority),
+        )
 
 
 def pop_job(max_priority: int | None = None) -> tuple[str, dict] | None:
@@ -223,7 +237,7 @@ def upsert_teams(rows: list[dict], team_key_fn) -> None:
                     name,
                     row.get("slug"),
                     short,
-                    team_key_fn(short or name),
+                    team_key_fn(name or short),
                     ts,
                 ),
             )
@@ -682,23 +696,60 @@ def find_team_by_id(team_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def _compact_team(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
 def find_team(team_name: str, team_key_fn) -> dict | None:
-    key = team_key_fn(team_name)
+    q = (team_name or "").strip()
+    if not q:
+        return None
+    ql = q.lower()
+    compact = _compact_team(q)
+    key = team_key_fn(q)
     with _connect() as conn:
         row = conn.execute(
-            "SELECT * FROM bdl_teams WHERE team_key = ? LIMIT 1",
-            (key,),
+            "SELECT * FROM bdl_teams WHERE lower(name) = ? LIMIT 1",
+            (ql,),
         ).fetchone()
-        if not row and team_name:
+        if row:
+            return dict(row)
+        row = conn.execute(
+            """
+            SELECT * FROM bdl_teams
+            WHERE lower(short_name) = ?
+               OR lower(replace(replace(IFNULL(short_name, ''), '.', ''), ' ', '')) = ?
+            LIMIT 1
+            """,
+            (ql, compact),
+        ).fetchone()
+        if row:
+            return dict(row)
+        if key:
             row = conn.execute(
-                """
-                SELECT * FROM bdl_teams
-                WHERE lower(name) = ? OR lower(short_name) = ?
-                LIMIT 1
-                """,
-                (team_name.lower(), team_name.lower()),
+                "SELECT * FROM bdl_teams WHERE team_key = ? LIMIT 1",
+                (key,),
             ).fetchone()
-    return dict(row) if row else None
+            if row:
+                return dict(row)
+        if 2 <= len(compact) <= 5:
+            rows = conn.execute(
+                "SELECT * FROM bdl_teams WHERE IFNULL(name, '') != ''"
+            ).fetchall()
+        else:
+            rows = []
+    hits = [
+        r
+        for r in rows
+        if _compact_team(r["short_name"]) == compact
+        or _compact_team(r["name"]) == compact
+        or (
+            compact == "".join(w[0] for w in re.findall(r"[A-Za-z0-9]+", r["name"] or "")).lower()
+        )
+    ]
+    if len(hits) == 1:
+        return dict(hits[0])
+    return None
 
 
 def team_rank(team_id: int | None) -> dict | None:
@@ -714,7 +765,7 @@ def map_pool(team_id: int) -> list[dict]:
         rows = conn.execute(
             """
             SELECT * FROM bdl_map_pool
-            WHERE team_id = ? AND IFNULL(matches_played, 0) >= 3
+            WHERE team_id = ? AND IFNULL(matches_played, 0) >= 1
             ORDER BY win_rate DESC, matches_played DESC
             """,
             (team_id,),

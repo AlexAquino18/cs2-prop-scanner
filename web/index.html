@@ -272,7 +272,7 @@
 
     function playerBtn(row) {
       const line = row.prizepicks?.value ?? row.underdog?.value ?? "";
-      return `<button type="button" class="plink" data-name="${esc(row.player)}" data-key="${esc(row.player_key || row.player)}" data-stat="${esc(row.stat_key || "kills")}" data-map="${esc(row.map || "full")}" data-line="${line}">${esc(row.player)}</button>`;
+      return `<button type="button" class="plink" data-name="${esc(row.player)}" data-key="${esc(row.player_key || row.player)}" data-team="${esc(row.team || "")}" data-stat="${esc(row.stat_key || "kills")}" data-map="${esc(row.map || "full")}" data-line="${line}">${esc(row.player)}</button>`;
     }
 
     function gapRow(g) {
@@ -335,7 +335,7 @@
         <section class="match">
           <div class="match-head">
             <div>
-              <h3><button type="button" class="mlink" data-label="${esc(m.label)}">${esc(m.label)}</button></h3>
+              <h3><button type="button" class="mlink" data-label="${esc(m.label)}" data-sides="${esc((m.sides || []).join("|"))}">${esc(m.label)}</button></h3>
               <div class="meta">${esc(m.start || "")}</div>
             </div>
             ${oddsPills(m.series)}
@@ -356,7 +356,7 @@
         b.onclick = () => openPlayer(b.dataset);
       });
       document.querySelectorAll(".mlink").forEach((b) => {
-        b.onclick = () => openMatchup(b.dataset.label);
+        b.onclick = () => openMatchup(b.dataset.label, b.dataset.sides);
       });
     }
 
@@ -452,15 +452,23 @@
         map: ds.map || "1-2",
       });
       if (ds.line) qs.set("line", ds.line);
+      if (ds.team) qs.set("team", ds.team);
       let p = null;
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 12; i++) {
         if (tick !== drawerTick) return;
         const res = await fetch("/api/player?" + qs.toString());
         p = await res.json();
         if (tick !== drawerTick) return;
         renderPlayer(p, ds.name, ds);
         if (!p.queued) break;
-        await new Promise((r) => setTimeout(r, 800));
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      if (p && p.queued) {
+        p.queued = false;
+        if (!(p.recent || []).length) {
+          p.message = "Map pool is ready. Last 10 maps are still filling — click again in a minute.";
+        }
+        renderPlayer(p, ds.name, ds);
       }
     }
 
@@ -473,13 +481,23 @@
       showDrawer(shell(m.label || label, "Map pools", `${note}<div class="sides">${cols}</div>`));
     }
 
-    async function openMatchup(label) {
+    async function openMatchup(label, sides) {
       const tick = ++drawerTick;
       showDrawer(shell(label, "Map pools", `<div class="note spin">Opening matchup…</div>`));
-      const res = await fetch("/api/matchup?label=" + encodeURIComponent(label));
-      const m = await res.json();
-      if (tick !== drawerTick) return;
-      renderMatchup(m, label);
+      const qs = new URLSearchParams({ label: label || "" });
+      if (sides) qs.set("sides", sides);
+      let m = null;
+      for (let i = 0; i < 8; i++) {
+        if (tick !== drawerTick) return;
+        const res = await fetch("/api/matchup?" + qs.toString());
+        m = await res.json();
+        if (tick !== drawerTick) return;
+        renderMatchup(m, label);
+        const empty = (m.teams || []).some((t) => !(t.maps || []).length);
+        if (!m.queued && !empty) break;
+        if (!m.queued && i >= 2) break;
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     }
 
     async function load() {
