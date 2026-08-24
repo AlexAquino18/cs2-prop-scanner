@@ -44,6 +44,7 @@ ALIASES = {
     "fal": "falcons",
     "fnatic": "fnatic",
     "fnc": "fnatic",
+    "fut": "fut",
     "furia": "furia",
     "g2": "g2",
     "gamerlegion": "gamerlegion",

@@ -44,3 +44,9 @@ PUBLIC_SITE_URL = os.environ.get(
     "PUBLIC_SITE_URL",
     "https://cs2-prop-scanner.onrender.com",
 ).rstrip("/")
+
+# --- BallDontLie CS2 (player DB / map stats). Key in .env, never commit it. ---
+BALLDONTLIE_API_KEY = os.environ.get("BALLDONTLIE_API_KEY", "").strip()
+BALLDONTLIE_BASE_URL = "https://api.balldontlie.io/cs/v1"
+# Trial is 5 req/min. Paid GOAT is 600/min — drop this to 0.2 after upgrading.
+BALLDONTLIE_MIN_INTERVAL = float(os.environ.get("BALLDONTLIE_MIN_INTERVAL", "13"))

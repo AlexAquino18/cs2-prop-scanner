@@ -11,3 +11,5 @@ services:
         value: "3.11.9"
       - key: PUBLIC_SITE_URL
         value: https://cs2-prop-scanner.onrender.com
+      - key: BALLDONTLIE_API_KEY
+        sync: false

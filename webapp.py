@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 import board
 import config
 import ingest
+import profiles
+import statsdb
 import store
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -45,6 +47,12 @@ async def lifespan(app: FastAPI):
     except Exception:
         scheduler = None
     threading.Thread(target=_safe_ingest, daemon=True).start()
+    try:
+        import bdl_sync
+
+        bdl_sync.start_background()
+    except Exception:
+        pass
     yield
     if scheduler:
         scheduler.shutdown(wait=False)
@@ -106,6 +114,27 @@ def api_board(
     threshold: float = Query(default=0.5),
 ):
     return board.build_dashboard(date=date, threshold=threshold)
+
+
+@app.get("/api/player")
+def api_player(
+    name: str = Query(...),
+    stat: str = Query(default="kills"),
+    map: str = Query(default="1-2"),
+    line: float | None = Query(default=None),
+):
+    return profiles.player_profile(name, stat_key=stat, map_range=map, line=line)
+
+
+@app.get("/api/players")
+def api_players(q: str = Query(default="")):
+    statsdb.init_db()
+    return {"ok": True, "players": statsdb.search_players(q)}
+
+
+@app.get("/api/matchup")
+def api_matchup(label: str = Query(...)):
+    return profiles.matchup_profile(label)
 
 
 @app.post("/api/refresh")

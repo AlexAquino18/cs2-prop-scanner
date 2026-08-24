@@ -166,8 +166,10 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
         gaps.append(
             {
                 "player": disc.player,
+                "player_key": any_prop.player_key,
                 "team": team,
                 "stat": format_stat(disc.stat, disc.map_range),
+                "stat_key": disc.stat,
                 "map": disc.map_range or "full",
                 "matchup": matchup,
                 "start": fmt_time(any_prop.starts_at),
@@ -206,8 +208,11 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
         movers.append(
             {
                 "player": any_prop.player_raw,
+                "player_key": any_prop.player_key,
                 "team": any_prop.team or "",
                 "stat": format_stat(any_prop.stat_key, map_range),
+                "stat_key": any_prop.stat_key,
+                "map": map_range or "full",
                 "matchup": next((p.opponent for p in group.values() if p.opponent), ""),
                 "max_move": mag,
                 "spread_was": open_spread,
@@ -260,6 +265,15 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
         1 for m in movers if (m["spread_was"] or 0) >= 0.5 and m["spread_now"] < 0.05
     )
 
+    bdl_n = 0
+    try:
+        import statsdb as _statsdb
+
+        _statsdb.init_db()
+        bdl_n = _statsdb.counts().get("players") or 0
+    except Exception:
+        bdl_n = 0
+
     return {
         "ok": True,
         "message": None,
@@ -276,6 +290,7 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
             "max_spread": gaps[0]["spread"] if gaps else 0,
             "matches": len(matches),
             "series": sum(1 for m in matches if m.get("series")),
+            "players": bdl_n,
         },
         "gaps": gaps,
         "movers": movers,

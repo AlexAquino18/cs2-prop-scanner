@@ -86,13 +86,34 @@
     .pill.fav { border-color: #238636; color: var(--up); }
     footer { color: var(--muted); font-size: 12px; padding: 8px 22px 28px; max-width: 1100px; margin: 0 auto; }
     footer a { color: var(--accent); }
+    button.plink, button.mlink {
+      background: none; border: 0; padding: 0; color: var(--accent);
+      cursor: pointer; font: inherit; text-align: left;
+    }
+    button.plink:hover, button.mlink:hover { text-decoration: underline; }
+    .drawer {
+      position: fixed; top: 0; right: 0; width: min(420px, 100vw); height: 100vh;
+      background: var(--bg); border-left: 1px solid var(--line); z-index: 20;
+      overflow: auto; padding: 16px 16px 32px; display: none;
+    }
+    .drawer.open { display: block; }
+    .drawer h2 { margin-top: 0; }
+    .hit { margin: 8px 0 12px; }
+    .bar {
+      height: 8px; background: #12171e; border-radius: 99px; overflow: hidden; margin-top: 4px;
+    }
+    .bar > span { display: block; height: 100%; background: var(--up); }
+    .pool { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 16px; }
+    .pool div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+    .recent td.over { color: var(--up); }
+    .recent td.under { color: var(--down); }
   </style>
 </head>
 <body>
   <header>
     <div>
       <h1>CS2 Prop Scanner</h1>
-      <p class="lede">Where PrizePicks and Underdog disagree on CS2 player props. Series-winner odds from Polymarket sit on the match, not on every row.</p>
+      <p class="lede">Where PrizePicks and Underdog disagree. Click a player for recent maps, or a match name for map pools. Series odds from Polymarket.</p>
       <div class="meta" id="updated">Loading…</div>
     </div>
     <div class="row" style="margin:0">
@@ -122,6 +143,7 @@
     Free tool for CS2 pick’em. Not gambling advice — lines move, odds can be stale, and a gap is not a lock.
     Data from PrizePicks, Underdog, and <a href="https://polymarket.com/esports/cs2" target="_blank" rel="noopener">Polymarket</a>. 18+.
   </footer>
+  <aside id="drawer" class="drawer" hidden></aside>
   <script>
     const $ = (id) => document.getElementById(id);
     const params = new URLSearchParams(location.search);
@@ -177,9 +199,14 @@
       return !q || (text || "").toLowerCase().includes(q);
     }
 
+    function playerBtn(row) {
+      const line = row.prizepicks?.value ?? row.underdog?.value ?? "";
+      return `<button class="plink" data-name="${esc(row.player)}" data-key="${esc(row.player_key || row.player)}" data-stat="${esc(row.stat_key || "kills")}" data-map="${esc(row.map || "full")}" data-line="${line}">${esc(row.player)}</button>`;
+    }
+
     function gapRow(g) {
       return [
-        esc(g.player), esc(g.team), esc(g.stat),
+        playerBtn(g), esc(g.team), esc(g.stat),
         `<span class="spread">${g.spread.toFixed(1)}</span>`,
         cell(g.prizepicks), cell(g.underdog),
       ];
@@ -202,6 +229,7 @@
         ["Gaps", s.gaps ?? 0],
         ["Matches", s.matches ?? 0],
         ["Series odds", s.series ?? 0],
+        ["Player DB", s.players ?? 0],
         ["Movers", s.movers ?? 0],
         ["PrizePicks", s.prizepicks ?? 0],
         ["Underdog", s.underdog ?? 0],
@@ -216,7 +244,7 @@
       $("movers").innerHTML = table(
         ["Player", "Team", "Stat", "Matchup", "PrizePicks", "Underdog", "Open → now"],
         movers.map((m) => [
-          esc(m.player), esc(m.team), esc(m.stat), esc(m.matchup || "—"),
+          playerBtn(m), esc(m.team), esc(m.stat), esc(m.matchup || "—"),
           cell(m.prizepicks), cell(m.underdog),
           `${m.spread_was ?? "—"} → ${m.spread_now}`,
         ]),
@@ -231,13 +259,12 @@
       })).filter((m) => m.gaps.length);
       if (!matches.length) {
         $("matches").innerHTML = `<div class="empty">${q ? "No matches for that search." : "No gaps for this date."}</div>`;
-        return;
-      }
-      $("matches").innerHTML = matches.map((m) => `
+      } else {
+        $("matches").innerHTML = matches.map((m) => `
         <section class="match">
           <div class="match-head">
             <div>
-              <h3>${esc(m.label)}</h3>
+              <h3><button class="mlink" data-label="${esc(m.label)}">${esc(m.label)}</button></h3>
               <div class="meta">${esc(m.start || "")}</div>
             </div>
             ${oddsPills(m.series)}
@@ -249,6 +276,85 @@
           )}
         </section>
       `).join("");
+      }
+      bindLinks();
+    }
+
+    function bindLinks() {
+      document.querySelectorAll(".plink").forEach((b) => {
+        b.onclick = () => openPlayer(b.dataset);
+      });
+      document.querySelectorAll(".mlink").forEach((b) => {
+        b.onclick = () => openMatchup(b.dataset.label);
+      });
+    }
+
+    function closeDrawer() {
+      $("drawer").classList.remove("open");
+      $("drawer").hidden = true;
+    }
+
+    function showDrawer(html) {
+      $("drawer").hidden = false;
+      $("drawer").classList.add("open");
+      $("drawer").innerHTML = html;
+      const x = $("drawer").querySelector("[data-close]");
+      if (x) x.onclick = closeDrawer;
+    }
+
+    async function openPlayer(ds) {
+      showDrawer(`<button data-close>Close</button><p class="meta">Loading ${esc(ds.name)}…</p>`);
+      const qs = new URLSearchParams({
+        name: ds.name || ds.key,
+        stat: ds.stat || "kills",
+        map: ds.map || "1-2",
+      });
+      if (ds.line) qs.set("line", ds.line);
+      const res = await fetch("/api/player?" + qs.toString());
+      const p = await res.json();
+      const hits = p.hits
+        ? `<div class="hit"><b>${p.hits.overs}/${p.hits.n}</b> overs vs ${p.hits.line} (${p.hits.pct}%)
+            <div class="bar"><span style="width:${p.hits.pct}%"></span></div></div>`
+        : "";
+      const pool = (p.maps || []).length
+        ? `<h2>Map pool</h2><div class="pool">${p.maps.map((m) =>
+            `<div><b>${esc(m.label)}</b><div class="meta">${m.wins}-${m.losses} (${m.win_rate}%)</div></div>`
+          ).join("")}</div>`
+        : "";
+      const recent = (p.recent || []).length
+        ? table(
+            ["When", "Opp", "Maps", p.stat || "Stat"],
+            p.recent.map((r) => {
+              const cls = p.hits ? (r.value > p.hits.line ? "over" : "under") : "";
+              const when = r.start ? new Date(r.start).toLocaleDateString() : "";
+              return [esc(when), esc(r.opponent || "—"), esc(r.maps || "—"), `<span class="${cls}">${r.value}</span>`];
+            }),
+            ["", "", "", "num"]
+          )
+        : `<p class="empty">${esc(p.message || "No map stats yet.")}</p>`;
+      showDrawer(`
+        <button data-close>Close</button>
+        <h2>${esc(p.player || ds.name)}</h2>
+        <p class="meta">${esc([p.team, p.full_name, p.rank ? "WR #" + p.rank : ""].filter(Boolean).join(" · "))}</p>
+        ${p.avg != null ? `<p>Avg ${esc(p.stat)}: <b>${p.avg}</b></p>` : ""}
+        ${hits}
+        <h2>Recent</h2>
+        ${recent}
+        ${pool}
+      `);
+    }
+
+    async function openMatchup(label) {
+      showDrawer(`<button data-close>Close</button><p class="meta">Loading matchup…</p>`);
+      const res = await fetch("/api/matchup?label=" + encodeURIComponent(label));
+      const m = await res.json();
+      const cols = (m.teams || []).map((t) => {
+        const maps = (t.maps || []).map((x) =>
+          `<div><b>${esc(x.label)}</b><div class="meta">${x.wins}-${x.losses} (${x.win_rate}%)</div></div>`
+        ).join("") || `<p class="empty">Map pool still syncing.</p>`;
+        return `<div><h2>${esc(t.name)}${t.rank ? " · #" + t.rank : ""}</h2><div class="pool">${maps}</div></div>`;
+      }).join("");
+      showDrawer(`<button data-close>Close</button>${m.message ? `<p class="meta">${esc(m.message)}</p>` : ""}${cols}`);
     }
 
     async function load() {

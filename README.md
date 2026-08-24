@@ -41,6 +41,8 @@ Open http://127.0.0.1:8000 — it pulls PrizePicks and Underdog on startup, then
 
 Live site: https://cs2-prop-scanner.onrender.com/
 
+Click a player name for recent maps vs the line, or a match title for team map pools. That uses the [BallDontLie CS2 API](https://cs.balldontlie.io/). Put `BALLDONTLIE_API_KEY` in `.env` locally and in the Render env vars. The GOAT trial is 5 requests/minute, so the player DB fills in the background.
+
 ## Host it (Render)
 
 1. Push this repo to GitHub.
