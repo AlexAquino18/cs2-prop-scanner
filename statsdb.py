@@ -805,6 +805,14 @@ def find_team_by_id(team_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def list_teams() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, name, short_name, team_key FROM bdl_teams ORDER BY name"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _compact_team(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]", "", (value or "").lower())
 
