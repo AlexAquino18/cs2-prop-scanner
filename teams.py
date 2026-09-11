@@ -5,7 +5,6 @@ import re
 import unicodedata
 
 NOISE = {
-    "academy",
     "clan",
     "club",
     "esport",
@@ -35,9 +34,15 @@ ALIASES = {
     "cloud9": "cloud9",
     "c9": "cloud9",
     "complexity": "complexity",
+    "cybershoke": "cybershoke",
+    "cs": "cybershoke",
     "ence": "ence",
+    "exz": "exzerotenacity",
+    "exzerotenacity": "exzerotenacity",
     "eternalfire": "eternalfire",
     "ef": "eternalfire",
+    "exr": "exruby",
+    "exruby": "exruby",
     "faze": "faze",
     "fazeclan": "faze",
     "falcons": "falcons",
@@ -47,6 +52,8 @@ ALIASES = {
     "fut": "fut",
     "furia": "furia",
     "g2": "g2",
+    "g2a": "g2academy",
+    "g2academy": "g2academy",
     "gamerlegion": "gamerlegion",
     "gl": "gamerlegion",
     "gl1": "gamerlegion",

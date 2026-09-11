@@ -92,62 +92,257 @@ def recent_pool(team_id: int | None, games: int = POOL_GAMES) -> tuple[list[dict
                 "win_rate": rate,
                 "map1": st["map1"],
                 "map2": st["map2"],
-                "likely_ban": bool(enough and played == 0),
+                "likely_ban": False,
             }
         )
     out.sort(key=lambda m: (-m["played"], -m["win_rate"], m["label"]))
     return out, len(series)
 
 
-def _project_maps(teams: list[dict]) -> dict | None:
+def _avoid_order(maps: list[dict]) -> list[dict]:
+    return sorted(
+        maps,
+        key=lambda m: (
+            0 if (m.get("played") or 0) == 0 else 1,
+            m.get("played") or 0,
+            m.get("win_rate") or 0,
+            m.get("label") or "",
+        ),
+    )
+
+
+def _pick_order(maps: list[dict]) -> list[dict]:
+    return sorted(
+        maps,
+        key=lambda m: (
+            -(m.get("map1") or 0),
+            -(m.get("played") or 0),
+            -(m.get("win_rate") or 0),
+        ),
+    )
+
+
+def _project_veto(teams: list[dict]) -> dict | None:
+    """BO3: one ban each, then map 1 pick, then map 2 pick."""
     if len(teams) < 2:
         return None
     a, b = teams[0], teams[1]
-    a_maps, b_maps = a.get("maps") or [], b.get("maps") or []
-    if not a_maps or not b_maps:
+    if not a.get("maps") or not b.get("maps"):
         return None
-    a_bans = {m["map"] for m in a_maps if m.get("likely_ban")}
-    b_bans = {m["map"] for m in b_maps if m.get("likely_ban")}
+    ban_a = _avoid_order(a["maps"])[0]
+    ban_b = next((m for m in _avoid_order(b["maps"]) if m["map"] != ban_a["map"]), None)
+    banned = {ban_a["map"]}
+    if ban_b:
+        banned.add(ban_b["map"])
 
-    def choose(maps: list[dict], opp_bans: set[str], taken: set[str]) -> dict | None:
-        ranked = sorted(
-            maps,
-            key=lambda m: (-(m.get("map1") or 0), -(m.get("played") or 0), -(m.get("win_rate") or 0)),
-        )
-        for row in ranked:
-            if row["map"] in taken or row.get("likely_ban"):
-                continue
-            if row["map"] in opp_bans:
-                continue
-            if row.get("played"):
-                return row
-        for row in ranked:
-            if row["map"] not in taken and not row.get("likely_ban"):
+    def pick(maps: list[dict], taken: set[str]) -> dict | None:
+        skip = banned | taken
+        for row in _pick_order(maps):
+            if row["map"] not in skip:
                 return row
         return None
 
-    first = choose(a_maps, b_bans, set())
-    taken = {first["map"]} if first else set()
-    second = choose(b_maps, a_bans, taken)
-    if not first or not second:
-        return None
-    bans = []
+    first = pick(a["maps"], set())
+    second = pick(b["maps"], {first["map"]} if first else set())
+    bans = [{"team": a["name"], "map": ban_a["label"], "slug": ban_a["map"]}]
+    if ban_b:
+        bans.append({"team": b["name"], "map": ban_b["label"], "slug": ban_b["map"]})
+    return {
+        "map1": {"label": first["label"], "why": f"{a['name']} pick"} if first else None,
+        "map2": {"label": second["label"], "why": f"{b['name']} pick"} if second else None,
+        "bans": bans,
+        "note": "One ban each, then map 1, then map 2. Guess from last 20 games, not a live veto.",
+    }
+
+
+def _stamp_bans(teams: list[dict], projected: dict | None) -> None:
+    slugs = {b.get("slug") for b in (projected or {}).get("bans") or [] if b.get("slug")}
     for team in teams:
         for row in team.get("maps") or []:
-            if row.get("likely_ban"):
-                bans.append({"team": team["name"], "map": row["label"]})
+            row["likely_ban"] = row.get("map") in slugs
+
+
+def _team_block(name: str) -> dict:
+    row, _queued = bdl_sync.lookup_or_fetch_team(name)
+    if not row:
+        return {"name": name, "rank": None, "maps": [], "series": 0, "queued": True}
+    rank = statsdb.team_rank(row["id"])
+    pool, series_n = recent_pool(row["id"])
     return {
-        "map1": {
-            "label": first["label"],
-            "why": f"{a['name']} pick",
-        },
-        "map2": {
-            "label": second["label"],
-            "why": f"{b['name']} pick",
-        },
-        "bans": bans,
-        "note": "From last 20 games, not a live veto.",
+        "name": row["name"],
+        "rank": rank.get("rank") if rank else None,
+        "maps": pool,
+        "series": series_n,
+        "queued": series_n == 0,
     }
+
+
+def _side_is_known(side: str, known_team: str | None) -> bool:
+    if not known_team:
+        return False
+    if team_key(side) == team_key(known_team):
+        return True
+    sc = "".join(ch for ch in (side or "").lower() if ch.isalnum())
+    kc = "".join(ch for ch in (known_team or "").lower() if ch.isalnum())
+    return bool(sc and kc and len(sc) >= 2 and (kc.startswith(sc) or sc.startswith(kc)))
+
+
+def _resolve_sides(sides: list[str], known_team: str | None = None) -> list[str]:
+    out = []
+    for side in sides[:2]:
+        hit = None
+        if _side_is_known(side, known_team):
+            hit = statsdb.find_team(known_team, team_key) or statsdb.find_team(side, team_key)
+            out.append(hit["name"] if hit else known_team)
+            continue
+        hit = statsdb.find_team(side, team_key)
+        out.append(hit["name"] if hit else side)
+    return out
+
+
+def _matchup_label(prop, fallback: str = "", known_team: str | None = None) -> tuple[str, list[str]]:
+    matchup = (prop.opponent if prop else "") or fallback or ""
+    sides = split_matchup(matchup)
+    team = known_team or (prop.team if prop else None)
+    if len(sides) < 2 and team and matchup and " vs " not in matchup.lower():
+        sides = [team, matchup]
+    sides = _resolve_sides(sides, team)
+    if len(sides) >= 2:
+        matchup = f"{sides[0]} vs {sides[1]}"
+    return matchup, sides
+
+
+def _board_index() -> tuple[dict, dict, object | None]:
+    try:
+        import board as board_mod
+        import store
+    except Exception:
+        return {}, {}, None
+    ids = store.latest_snapshot_ids(1)
+    if not ids:
+        return {}, {}, board_mod
+    index = {}
+    team_matchup = {}
+    for prop in store.load_lines(ids[0][0]):
+        if prop.player_key and prop.player_key not in index:
+            index[prop.player_key] = prop
+        if prop.team and prop.opponent:
+            team_matchup[team_key(prop.team)] = prop.opponent
+    return index, team_matchup, board_mod
+
+
+def _upcoming_from_prop(prop, fallback: str = "", board_mod=None, known_team: str | None = None) -> dict:
+    label, sides = _matchup_label(prop, fallback, known_team=known_team)
+    return {
+        "label": label,
+        "team": prop.team,
+        "start": board_mod.fmt_time(prop.starts_at) if board_mod else "",
+        "starts_at": prop.starts_at,
+        "sides": sides,
+        "map": prop.map_range or "full",
+    }
+
+
+def _upcoming_for(player_name: str, team: str | None = None) -> dict | None:
+    try:
+        import board
+        import store
+        from normalize import normalize_player_name
+    except Exception:
+        return None
+    ids = store.latest_snapshot_ids(1)
+    if not ids:
+        return None
+    key = normalize_player_name(player_name)
+    want_team = team_key(team) if team else None
+    hit = None
+    fallback_hit = None
+    teammate_matchup = ""
+    for prop in store.load_lines(ids[0][0]):
+        if want_team and team_key(prop.team) == want_team and prop.opponent:
+            teammate_matchup = teammate_matchup or prop.opponent
+        if prop.player_key != key:
+            continue
+        team_ok = not want_team or not team_key(prop.team) or team_key(prop.team) == want_team
+        if not team_ok:
+            fallback_hit = fallback_hit or prop
+            continue
+        hit = prop
+        if prop.opponent:
+            break
+    hit = hit or fallback_hit
+    if not hit:
+        return None
+    return _upcoming_from_prop(hit, teammate_matchup, board, team)
+
+
+def _recent_map1(player_id: int | None) -> tuple[list[int], float | None]:
+    recent = []
+    if not player_id:
+        return [], None
+    for item in statsdb.player_map_rows(player_id, limit=8):
+        if item.get("map_number") != 1 or item.get("kills") is None:
+            continue
+        recent.append(int(item["kills"]))
+        if len(recent) >= 5:
+            break
+    avg = round(sum(recent) / len(recent), 1) if recent else None
+    return recent, avg
+
+
+def lookup_players(query: str) -> list[dict]:
+    statsdb.init_db()
+    q = (query or "").strip()
+    if len(q) < 2:
+        return []
+    from normalize import normalize_player_name
+
+    hits = statsdb.search_players(q, limit=20)
+    seen = {normalize_player_name(h.get("nickname") or "") for h in hits}
+    index, team_matchup, board_mod = _board_index()
+    qk = q.lower()
+    for prop in index.values():
+        if prop.player_key in seen:
+            continue
+        if qk not in (prop.player_raw or "").lower() and qk not in (prop.player_key or ""):
+            continue
+        hits.append(
+            {
+                "nickname": prop.player_raw,
+                "player_key": prop.player_key,
+                "team_name": prop.team,
+                "id": None,
+            }
+        )
+        seen.add(prop.player_key)
+        if len(hits) >= 20:
+            break
+    out = []
+    for row in hits[:20]:
+        name = row.get("nickname") or ""
+        key = normalize_player_name(name) or row.get("player_key") or ""
+        player_id = row.get("id")
+        found = statsdb.find_player(key) if not player_id else None
+        if found:
+            player_id = found["id"]
+        stats_team = row.get("team_name") or (found or {}).get("team_name")
+        prop = index.get(key)
+        upcoming = None
+        if prop:
+            fallback = team_matchup.get(team_key(prop.team) or "") or ""
+            upcoming = _upcoming_from_prop(prop, fallback, board_mod, stats_team)
+        recent, avg = _recent_map1(player_id)
+        out.append(
+            {
+                "name": name,
+                "team": row.get("team_name") or (upcoming or {}).get("team"),
+                "upcoming": upcoming,
+                "recent_map1": recent,
+                "avg_map1": avg,
+                "has_stats": bool(player_id),
+            }
+        )
+    return out
 
 
 def _same_org(a: str | None, b: str | None) -> bool:
@@ -411,6 +606,18 @@ def player_profile(
     avg = round(sum(s["value"] for s in samples) / len(samples), 1) if samples else None
     rank = statsdb.team_rank(side_id)
     pool, _n = recent_pool(side_id)
+    upcoming = _upcoming_for(player.get("nickname") or name, side_name or team)
+    projected = None
+    if upcoming and len(upcoming.get("sides") or []) >= 2:
+        blocks = [_team_block(side) for side in upcoming["sides"][:2]]
+        projected = _project_veto(blocks)
+        if projected and token == "1":
+            projected = {
+                **projected,
+                "map2": None,
+                "note": "One ban each, then map 1. Guess from last 20 games, not a live veto.",
+            }
+        _stamp_bans([{"maps": pool}], projected)
     cached_at = None
     if side_id:
         cached_at = statsdb.meta_get(f"ready_at:{side_id}") or statsdb.meta_get(f"pool_at:{side_id}")
@@ -433,6 +640,8 @@ def player_profile(
         "l10": _hit_rate(samples, line, 10),
         "maps": pool,
         "recent": samples[:target],
+        "upcoming": upcoming,
+        "projected": projected,
         "cached_at": cached_at,
         "message": note,
     }
@@ -445,25 +654,11 @@ def matchup_profile(label: str, sides_text: str | None = None) -> dict:
         sides = split_matchup(label)
     if len(sides) < 2:
         return {"ok": False, "queued": False, "message": "Need two teams.", "teams": []}
-    teams = []
-    for name in sides[:2]:
-        row, _queued = bdl_sync.lookup_or_fetch_team(name)
-        if not row:
-            teams.append({"name": name, "rank": None, "maps": [], "queued": False})
-            continue
-        rank = statsdb.team_rank(row["id"])
-        pool, series_n = recent_pool(row["id"])
-        teams.append(
-            {
-                "name": row["name"],
-                "rank": rank.get("rank") if rank else None,
-                "maps": pool,
-                "series": series_n,
-                "queued": series_n == 0,
-            }
-        )
+    sides = _resolve_sides(sides)
+    teams = [_team_block(name) for name in sides[:2]]
     empty = [t["name"] for t in teams if not t["maps"] or t.get("queued")]
-    projected = _project_maps(teams)
+    projected = _project_veto(teams)
+    _stamp_bans(teams, projected)
     return {
         "ok": True,
         "label": " vs ".join(t["name"] for t in teams),

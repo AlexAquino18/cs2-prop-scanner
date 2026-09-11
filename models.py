@@ -7,7 +7,7 @@ from typing import Optional
 
 @dataclass
 class PropLine:
-    source: str                    # "prizepicks" | "underdog" | "chalkboard"
+    source: str                    # "prizepicks" | "underdog" | "betr" | "chalkboard"
     player_raw: str                # name exactly as the book shows it
     player_key: str                # normalized name used for matching
     team: Optional[str]            # team/org abbreviation or name, if given

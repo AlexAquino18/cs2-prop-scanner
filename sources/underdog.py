@@ -1,10 +1,16 @@
 """
 Underdog Fantasy CS2 adapter.
 
-Fetches the same public pick'em catalog the Underdog website uses.
-No API token required.
+Fetches the public pick'em catalog the Underdog website uses.
+The old /beta/v5 and /beta/v6 catalog URLs now return HTTP 426
+(upgrade required). The web app uses /v1/over_under_lines with
+Client-* headers and sport_id=CS.
 """
+from __future__ import annotations
+
 import re
+import time
+import uuid
 
 import requests
 
@@ -12,8 +18,10 @@ import config
 from models import PropLine
 from normalize import normalize_player_name, normalize_stat
 
-UNDERDOG_URL = "https://api.underdogfantasy.com/beta/v5/over_under_lines"
+UNDERDOG_URL = "https://api.underdogfantasy.com/v1/over_under_lines"
+UNDERDOG_CLIENT_VERSION_URL = "https://app.underdogsports.com/client-version"
 CS_SPORT_IDS = {"CS", "CS2", "CSGO"}
+FALLBACK_CLIENT_VERSION = "20260907143253"
 
 HEADERS = {
     "User-Agent": (
@@ -22,9 +30,12 @@ HEADERS = {
     ),
     "Accept": "application/json",
     "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://app.underdogsports.com",
+    "Referer": "https://app.underdogsports.com/",
 }
 
 _VS_SPLIT = re.compile(r"\s+vs\.?\s+", re.I)
+_CLIENT_VERSION = {"value": None, "at": 0.0}
 
 
 def _player_name(player: dict) -> str:
@@ -60,11 +71,43 @@ def _odds_for(options: list, choice: str):
     return None
 
 
+def _client_version(session: requests.Session) -> str:
+    now = time.time()
+    cached = _CLIENT_VERSION["value"]
+    if cached and now - _CLIENT_VERSION["at"] < 3600:
+        return cached
+    try:
+        resp = session.get(
+            UNDERDOG_CLIENT_VERSION_URL,
+            headers=HEADERS,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        value = str((resp.json() or {}).get("clientVersion") or "").strip()
+        if value:
+            _CLIENT_VERSION["value"] = value
+            _CLIENT_VERSION["at"] = now
+            return value
+    except Exception:
+        pass
+    return cached or FALLBACK_CLIENT_VERSION
+
+
+def _request_headers(session: requests.Session) -> dict:
+    headers = dict(HEADERS)
+    headers["Client-Type"] = "web"
+    headers["Client-Version"] = _client_version(session)
+    headers["Client-Device-Id"] = str(uuid.uuid4())
+    headers["Client-Request-Id"] = str(uuid.uuid4())
+    return headers
+
+
 def fetch(session: requests.Session = None, dump_raw: bool = False) -> list:
     session = session or requests.Session()
     resp = session.get(
         UNDERDOG_URL,
-        headers=HEADERS,
+        headers=_request_headers(session),
+        params={"sport_id": "CS"},
         timeout=config.UNDERDOG_TIMEOUT_SECONDS,
     )
     resp.raise_for_status()

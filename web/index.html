@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CS2 Prop Scanner — PrizePicks vs Underdog</title>
-  <meta name="description" content="Live CS2 player prop discrepancies between PrizePicks and Underdog, grouped by match, with Polymarket series-winner odds." />
+  <title>CS2 Prop Scanner — PrizePicks vs Underdog vs Betr</title>
+  <meta name="description" content="Live CS2 player prop discrepancies between PrizePicks, Underdog, and Betr, grouped by match, with Polymarket series-winner odds." />
   <link rel="canonical" href="{{SITE_URL}}/" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="CS2 Prop Scanner — PrizePicks vs Underdog" />
+  <meta property="og:title" content="CS2 Prop Scanner — PrizePicks vs Underdog vs Betr" />
   <meta property="og:description" content="See where CS2 player props disagree across books, plus who Polymarket has winning the series." />
   <meta property="og:url" content="{{SITE_URL}}/" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="CS2 Prop Scanner" />
-  <meta name="twitter:description" content="PrizePicks vs Underdog CS2 props, with Polymarket series odds." />
+  <meta name="twitter:description" content="PrizePicks vs Underdog vs Betr CS2 props, with Polymarket series odds." />
   <script type="application/ld+json">
-    {"@context":"https://schema.org","@type":"WebApplication","name":"CS2 Prop Scanner","url":"{{SITE_URL}}/","description":"Live CS2 player prop discrepancies between PrizePicks and Underdog, with Polymarket series-winner odds.","applicationCategory":"SportsApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+    {"@context":"https://schema.org","@type":"WebApplication","name":"CS2 Prop Scanner","url":"{{SITE_URL}}/","description":"Live CS2 player prop discrepancies between PrizePicks, Underdog, and Betr, with Polymarket series-winner odds.","applicationCategory":"SportsApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
   </script>
   <style>
     :root {
@@ -60,7 +60,7 @@
     .empty { color: var(--muted); padding: 16px 0; }
     .banner { background: #1c2128; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; color: var(--muted); margin-bottom: 16px; }
     .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
-    table { width: 100%; border-collapse: collapse; min-width: 640px; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
     th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
     th { color: var(--muted); font-size: 12px; font-weight: 600; background: #12171e; position: sticky; top: 0; }
     tr:nth-child(even) td { background: #12171e; }
@@ -217,6 +217,14 @@
     .pool > div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
     .pool .pct { height: 4px; background: #12171e; border-radius: 99px; margin-top: 6px; overflow: hidden; }
     .pool .pct > i { display: block; height: 100%; background: var(--accent); }
+    .hits { display: grid; gap: 8px; margin: 0 0 18px; }
+    .hitcard {
+      display: grid; gap: 4px; background: var(--panel); border: 1px solid var(--line);
+      border-radius: 10px; padding: 10px 12px; cursor: pointer; text-align: left;
+      width: 100%; color: inherit; font: inherit;
+    }
+    .hitcard:hover { border-color: #3d4a5c; }
+    .hitcard b { font-size: 15px; }
     .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     @media (max-width: 520px) {
       .sides { grid-template-columns: 1fr; }
@@ -228,7 +236,7 @@
   <header>
     <div>
       <h1>CS2 Prop Scanner</h1>
-      <p class="lede">Where PrizePicks and Underdog disagree. Click a player for recent maps, or a match name for map pools. Series odds from Polymarket.</p>
+      <p class="lede">Where PrizePicks, Underdog, and Betr disagree. Click a player for recent maps, or a match name for map pools. Series odds from Polymarket.</p>
       <div class="meta" id="updated">Loading…</div>
     </div>
     <div class="row" style="margin:0">
@@ -247,6 +255,10 @@
     <div class="dates" id="dates"></div>
     <div class="stats" id="stats"></div>
     <div class="banner" id="banner" hidden></div>
+    <h2>Player lookup</h2>
+    <p class="meta" style="margin:-2px 0 10px">Search any player in the stats database. If they have a line today, their match and recent map 1 kills show up too.</p>
+    <input type="search" id="lookup" placeholder="Search all players" style="min-width:min(100%,280px);margin-bottom:10px" />
+    <div id="hits"></div>
     <h2>Moved vs opening line</h2>
     <p class="meta" style="margin:-2px 0 10px">Vs the first line we saw. Stays until the prop leaves the board.</p>
     <div id="movers"></div>
@@ -256,7 +268,7 @@
   </main>
   <footer>
     Free tool for CS2 pick’em. Not gambling advice — lines move, odds can be stale, and a gap is not a lock.
-    Data from PrizePicks, Underdog, Polymarket, and BallDontLie. 18+.
+    Data from PrizePicks, Underdog, Betr, Polymarket, and BallDontLie. 18+.
   </footer>
   <div id="scrim" class="scrim"></div>
   <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="d-title"></aside>
@@ -329,7 +341,7 @@
     }
 
     function playerBtn(row) {
-      const line = row.prizepicks?.value ?? row.underdog?.value ?? "";
+      const line = row.prizepicks?.value ?? row.underdog?.value ?? row.betr?.value ?? "";
       return `<button type="button" class="plink" data-name="${esc(row.player)}" data-key="${esc(row.player_key || row.player)}" data-team="${esc(row.team || "")}" data-stat="${esc(row.stat_key || "kills")}" data-map="${esc(row.map || "full")}" data-line="${line}">${esc(row.player)}</button>`;
     }
 
@@ -337,7 +349,7 @@
       return [
         playerBtn(g), esc(g.team), esc(g.stat),
         `<span class="spread">${g.spread.toFixed(1)}</span>`,
-        cell(g.prizepicks), cell(g.underdog),
+        cell(g.prizepicks), cell(g.underdog), cell(g.betr),
       ];
     }
 
@@ -362,6 +374,7 @@
         ["Movers", s.movers ?? 0],
         ["PrizePicks", s.prizepicks ?? 0],
         ["Underdog", s.underdog ?? 0],
+        ["Betr", s.betr ?? 0],
       ].map(([label, val]) => `<div class="stat"><b>${val}</b><span>${label}</span></div>`).join("");
 
       $("banner").hidden = !data.message;
@@ -371,13 +384,13 @@
         matchesQuery([m.player, m.team, m.stat, m.matchup].join(" "))
       );
       $("movers").innerHTML = table(
-        ["Player", "Team", "Stat", "Matchup", "PrizePicks", "Underdog", "Open → now"],
+        ["Player", "Team", "Stat", "Matchup", "PrizePicks", "Underdog", "Betr", "Open → now"],
         movers.map((m) => [
           playerBtn(m), esc(m.team), esc(m.stat), esc(m.matchup || "—"),
-          cell(m.prizepicks), cell(m.underdog),
-          `${m.spread_was ?? "—"} → ${m.spread_now}`,
+          cell(m.prizepicks), cell(m.underdog), cell(m.betr),
+          `${m.spread_was ?? "—"} → ${m.spread_now ?? "—"}`,
         ]),
-        ["", "", "", "", "num", "num", "num"]
+        ["", "", "", "", "num", "num", "num", "num"]
       );
 
       const matches = (data.matches || []).map((m) => ({
@@ -399,9 +412,9 @@
             ${oddsPills(m.series)}
           </div>
           ${table(
-            ["Player", "Team", "Stat", "Spread", "PrizePicks", "Underdog"],
+            ["Player", "Team", "Stat", "Spread", "PrizePicks", "Underdog", "Betr"],
             m.gaps.map(gapRow),
-            ["", "", "", "num", "num", "num"]
+            ["", "", "", "num", "num", "num", "num"]
           )}
         </section>
       `).join("");
@@ -466,15 +479,21 @@
     }
 
     function projectHtml(p) {
-      if (!p || !p.map1 || !p.map2) return "";
+      if (!p || !p.map1) return "";
       const bans = (p.bans || []).length
         ? p.bans.map((b) => `${esc(b.map)} (${esc(b.team)})`).join(" · ")
         : "none clear yet";
+      const two = p.map2
+        ? `<div class="meta" style="margin-top:10px">Projected maps 1–2</div>
+           <div class="proj-maps"><b>${esc(p.map1.label)}</b><span>then</span><b>${esc(p.map2.label)}</b></div>
+           <div class="meta">${esc(p.map1.why || "")} · ${esc(p.map2.why || "")}</div>`
+        : "";
       return `<div class="proj">
-        <div class="meta">Projected maps 1–2</div>
-        <div class="proj-maps"><b>${esc(p.map1.label)}</b><span>then</span><b>${esc(p.map2.label)}</b></div>
-        <div class="meta">${esc(p.map1.why || "")} · ${esc(p.map2.why || "")}</div>
-        <div class="meta">Likely bans: ${bans}</div>
+        <div class="meta">Projected map 1</div>
+        <div class="proj-maps"><b>${esc(p.map1.label)}</b></div>
+        <div class="meta">${esc(p.map1.why || "")}</div>
+        ${two}
+        <div class="meta">Bans before map 1: ${bans}</div>
         <div class="meta">${esc(p.note || "")}</div>
       </div>`;
     }
@@ -569,7 +588,10 @@
             <div class="kpi"><b>${p.line != null ? esc(fmtStat(p.line)) : "—"}</b><span>This line</span></div>
           </div>`
         : "";
-      showDrawer(shell(name, sub, `${note}${kpis}${l10Chart(p)}${gameLog(p.recent)}${poolHtml(p.maps, "Active pool · last 20")}`));
+      const up = p.upcoming
+        ? `<div class="note">${esc(p.upcoming.label || "Upcoming match")}${p.upcoming.start ? " · " + esc(p.upcoming.start) : ""}</div>`
+        : "";
+      showDrawer(shell(name, sub, `${note}${up}${projectHtml(p.projected)}${kpis}${l10Chart(p)}${gameLog(p.recent)}${poolHtml(p.maps, "Active pool · last 20")}`));
     }
 
     async function openPlayer(ds) {
@@ -631,6 +653,55 @@
       }
     }
 
+    let lookupTimer = null;
+    let lookupTick = 0;
+
+    function renderHits(rows) {
+      const box = $("hits");
+      if (!box) return;
+      if (!rows) {
+        box.innerHTML = "";
+        return;
+      }
+      if (!rows.length) {
+        box.innerHTML = `<div class="empty">No players for that search.</div>`;
+        return;
+      }
+      box.innerHTML = `<div class="hits">${rows.map((r) => {
+        const game = r.upcoming
+          ? `${esc(r.upcoming.label || "On the board")}${r.upcoming.start ? " · " + esc(r.upcoming.start) : ""}`
+          : "No upcoming line on today's board";
+        const form = (r.recent_map1 || []).length
+          ? `Map 1 kills: ${r.recent_map1.map(fmtStat).join(", ")} · avg ${esc(fmtStat(r.avg_map1))}`
+          : (r.has_stats ? "Stats in the snapshot, no map 1s yet" : "No stats loaded yet");
+        return `<button type="button" class="hitcard" data-name="${esc(r.name)}" data-team="${esc(r.team || "")}" data-stat="kills" data-map="${esc((r.upcoming && r.upcoming.map) || "1")}">
+          <b>${esc(r.name)}</b>
+          <div class="meta">${esc(r.team || "—")}</div>
+          <div class="meta">${game}</div>
+          <div class="meta">${form}</div>
+        </button>`;
+      }).join("")}</div>`;
+      box.querySelectorAll(".hitcard").forEach((b) => {
+        b.onclick = () => openPlayer(b.dataset);
+      });
+    }
+
+    $("lookup").oninput = () => {
+      const q = ($("lookup").value || "").trim();
+      clearTimeout(lookupTimer);
+      if (q.length < 2) {
+        renderHits(null);
+        return;
+      }
+      const tick = ++lookupTick;
+      lookupTimer = setTimeout(async () => {
+        const res = await fetch("/api/players?q=" + encodeURIComponent(q));
+        const data = await res.json();
+        if (tick !== lookupTick) return;
+        renderHits(data.players || []);
+      }, 220);
+    };
+
     async function load() {
       const threshold = $("threshold").value;
       const qs = new URLSearchParams({ threshold });
@@ -669,7 +740,7 @@
         } catch (e) {}
         if (st.has_data && !st.running) break;
         $("updated").textContent = st.running
-          ? "Pulling PrizePicks, Underdog, and Polymarket…"
+          ? "Pulling PrizePicks, Underdog, Betr, and Polymarket…"
           : "Waiting for first snapshot…";
         await new Promise((r) => setTimeout(r, 3000));
         await load();

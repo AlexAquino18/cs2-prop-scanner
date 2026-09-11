@@ -222,6 +222,22 @@ def pop_job(max_priority: int | None = None) -> tuple[str, dict] | None:
         return row["kind"], json.loads(row["payload"])
 
 
+def pop_job_kind(kind: str) -> tuple[str, dict] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, kind, payload FROM bdl_jobs
+            WHERE kind = ?
+            ORDER BY priority ASC, id ASC LIMIT 1
+            """,
+            (kind,),
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute("DELETE FROM bdl_jobs WHERE id = ?", (row["id"],))
+        return row["kind"], json.loads(row["payload"])
+
+
 def counts() -> dict:
     with _connect() as conn:
         def n(table: str) -> int:
@@ -823,6 +839,33 @@ def _compact_team(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]", "", (value or "").lower())
 
 
+def _team_activity(conn, team_id: int) -> tuple[int, int, int]:
+    maps = conn.execute(
+        "SELECT COUNT(*) AS c FROM bdl_matches WHERE team1_id = ? OR team2_id = ?",
+        (team_id, team_id),
+    ).fetchone()["c"]
+    ranked = 1 if conn.execute(
+        "SELECT 1 FROM bdl_rankings WHERE team_id = ? LIMIT 1",
+        (team_id,),
+    ).fetchone() else 0
+    players = conn.execute(
+        "SELECT COUNT(*) AS c FROM bdl_players WHERE team_id = ?",
+        (team_id,),
+    ).fetchone()["c"]
+    return int(maps), ranked, int(players)
+
+
+def _prefer_team(conn, rows: list[dict]) -> dict:
+    if len(rows) == 1:
+        return rows[0]
+    scored = []
+    for row in rows:
+        activity = _team_activity(conn, row["id"])
+        scored.append((activity, row.get("id") or 0, row))
+    scored.sort(key=lambda item: (-item[0][0], -item[0][1], -item[0][2], item[1]))
+    return scored[0][2]
+
+
 def find_team(team_name: str, team_key_fn) -> dict | None:
     q = (team_name or "").strip()
     if not q:
@@ -831,47 +874,76 @@ def find_team(team_name: str, team_key_fn) -> dict | None:
     compact = _compact_team(q)
     key = team_key_fn(q)
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM bdl_teams WHERE lower(name) = ? LIMIT 1",
-            (ql,),
-        ).fetchone()
-        if row:
-            return dict(row)
-        row = conn.execute(
-            """
-            SELECT * FROM bdl_teams
-            WHERE lower(short_name) = ?
-               OR lower(replace(replace(IFNULL(short_name, ''), '.', ''), ' ', '')) = ?
-            LIMIT 1
-            """,
-            (ql, compact),
-        ).fetchone()
-        if row:
-            return dict(row)
+        exact = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM bdl_teams WHERE lower(name) = ?",
+                (ql,),
+            ).fetchall()
+        ]
+        if exact and len(compact) > 3:
+            return _prefer_team(conn, exact)
+
+        def by_computed(rows: list[dict]) -> list[dict]:
+            if not key:
+                return []
+            return [r for r in rows if team_key_fn(r.get("name") or "") == key]
+
+        candidates = []
         if key:
-            row = conn.execute(
-                "SELECT * FROM bdl_teams WHERE team_key = ? LIMIT 1",
-                (key,),
-            ).fetchone()
-            if row:
-                return dict(row)
+            candidates.extend(
+                conn.execute(
+                    "SELECT * FROM bdl_teams WHERE team_key = ?",
+                    (key,),
+                ).fetchall()
+            )
+        if ql:
+            candidates.extend(
+                conn.execute(
+                    """
+                    SELECT * FROM bdl_teams
+                    WHERE lower(short_name) = ?
+                       OR lower(replace(replace(IFNULL(short_name, ''), '.', ''), ' ', '')) = ?
+                    """,
+                    (ql, compact),
+                ).fetchall()
+            )
+
+        seen = set()
+        uniq = []
+        for row in list(exact) + [dict(r) for r in candidates]:
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
+            uniq.append(row)
+
+        named = by_computed(uniq)
+        if named:
+            return _prefer_team(conn, named)
+        if key:
+            named = by_computed(
+                [dict(r) for r in conn.execute("SELECT * FROM bdl_teams WHERE IFNULL(name, '') != ''")]
+            )
+            if named:
+                return _prefer_team(conn, named)
         if 2 <= len(compact) <= 5:
             rows = conn.execute(
                 "SELECT * FROM bdl_teams WHERE IFNULL(name, '') != ''"
             ).fetchall()
-        else:
-            rows = []
-    hits = [
-        r
-        for r in rows
-        if _compact_team(r["short_name"]) == compact
-        or _compact_team(r["name"]) == compact
-        or (
-            compact == "".join(w[0] for w in re.findall(r"[A-Za-z0-9]+", r["name"] or "")).lower()
-        )
-    ]
-    if len(hits) == 1:
-        return dict(hits[0])
+            hits = [
+                dict(r)
+                for r in rows
+                if _compact_team(r["short_name"]) == compact
+                or _compact_team(r["name"]) == compact
+                or compact == "".join(w[0] for w in re.findall(r"[A-Za-z0-9]+", r["name"] or "")).lower()
+            ]
+            hits = by_computed(hits) or hits
+            if len(hits) == 1:
+                return hits[0]
+            if hits and key:
+                named = by_computed(hits)
+                if named:
+                    return _prefer_team(conn, named)
     return None
 
 

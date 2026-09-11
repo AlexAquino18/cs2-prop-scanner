@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="CS2 Prop Scanner",
-    description="PrizePicks vs Underdog CS2 player props, with Polymarket series odds.",
+    description="PrizePicks vs Underdog vs Betr CS2 player props, with Polymarket series odds.",
     lifespan=lifespan,
 )
 
@@ -149,8 +149,7 @@ def api_player(
 
 @app.get("/api/players")
 def api_players(q: str = Query(default="")):
-    statsdb.init_db()
-    return {"ok": True, "players": statsdb.search_players(q)}
+    return {"ok": True, "players": profiles.lookup_players(q)}
 
 
 @app.get("/api/matchup")

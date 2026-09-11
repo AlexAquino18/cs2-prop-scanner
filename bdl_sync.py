@@ -30,6 +30,8 @@ def status() -> dict:
         **statsdb.counts(),
         **_STATE,
         "last_daily": statsdb.meta_get("last_daily"),
+        "players_done": bool(statsdb.meta_get("players_done")),
+        "players_cursor": statsdb.meta_get("players_cursor"),
     }
     return out
 
@@ -266,6 +268,9 @@ def _refresh_team(payload: dict) -> str:
 
 def kick_catalog() -> None:
     statsdb.init_db()
+    if not statsdb.meta_get("players_done"):
+        cursor = statsdb.meta_get("players_cursor")
+        statsdb.enqueue("players_page", {"cursor": cursor} if cursor else {}, priority=15)
     if not statsdb.meta_get("teams_done"):
         cursor = statsdb.meta_get("teams_cursor")
         statsdb.enqueue("teams_page", {"cursor": cursor} if cursor else {}, priority=41)
@@ -283,9 +288,13 @@ def _params(cursor: str | None, extra: list[tuple] | None = None) -> list[tuple]
 
 
 def _tick_job() -> str:
-    job = statsdb.pop_job()
+    kick_catalog()
+    job = None
+    # Don't let map-pool fills starve the player catalog (trial is 5 req/min).
+    if _STATE.get("player_turn"):
+        job = statsdb.pop_job_kind("players_page")
+    _STATE["player_turn"] = not _STATE.get("player_turn")
     if not job:
-        kick_catalog()
         job = statsdb.pop_job()
     if not job:
         return "idle"
@@ -297,7 +306,7 @@ def _run_kind(kind: str, payload: dict) -> str:
     if kind == "team_refresh":
         return _refresh_team(payload)
     if kind == "players_page":
-        data = bdl.get("/players", _params(payload.get("cursor"), [("active", "true")]))
+        data = bdl.get("/players", _params(payload.get("cursor")))
         rows = data.get("data") or []
         statsdb.upsert_players(rows, normalize_player_name)
         nxt = (data.get("meta") or {}).get("next_cursor")
@@ -435,7 +444,7 @@ def start_background() -> None:
     if not bdl.enabled():
         return
     statsdb.init_db()
-    statsdb.drop_jobs("players_page", "team_by_key")
+    statsdb.drop_jobs("team_by_key")
     statsdb.drop_jobs_from("player_search", 4)
     kick_catalog()
     schedule_catalog()

@@ -4,11 +4,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import config
+import ingest
 import matching
 import store
 from models import PropLine
 from sources import polymarket
 from teams import matchup_keys, split_matchup, team_key
+
+BOOKS = config.BOOKS
 
 ET = ZoneInfo("America/New_York")
 
@@ -70,12 +74,25 @@ def available_dates(props: list[PropLine]) -> list[str]:
     return sorted(dates)
 
 
-def pick_default_date(dates: list[str]) -> str | None:
+def pick_default_date(dates: list[str], props: list[PropLine] | None = None) -> str | None:
     if not dates:
         return None
     today = datetime.now(ET).date().isoformat()
-    upcoming = [d for d in dates if d >= today]
-    return upcoming[0] if upcoming else dates[-1]
+    upcoming = [d for d in dates if d >= today] or dates
+    if not props:
+        return upcoming[0]
+    by_date: dict[str, list[PropLine]] = {}
+    for prop in props:
+        day = str(et_date(prop.starts_at) or "")
+        if day in upcoming:
+            by_date.setdefault(day, []).append(prop)
+
+    def score(day: str) -> tuple:
+        day_props = by_date.get(day) or []
+        sources = len({p.source for p in day_props})
+        return (sources, len(day_props))
+
+    return max(upcoming, key=score)
 
 
 def _series_payload(row: dict | None) -> dict | None:
@@ -119,13 +136,15 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
     if not snaps:
         return {
             "ok": False,
-            "message": "No snapshot yet. Hit Refresh to pull PrizePicks and Underdog.",
+            "message": "No snapshot yet. Hit Refresh to pull PrizePicks, Underdog, and Betr.",
             "dates": [],
             "date": date,
             "gaps": [],
             "movers": [],
             "matches": [],
             "stats": {},
+            "source_counts": {},
+            "source_errors": {},
         }
 
     latest_id, latest_at = snaps[0]
@@ -133,7 +152,7 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
     openings = store.load_openings()
 
     dates = available_dates(latest_props)
-    chosen = date if date in dates else pick_default_date(dates)
+    chosen = date if date in dates else pick_default_date(dates, latest_props)
     day_props = [p for p in latest_props if str(et_date(p.starts_at)) == chosen] if chosen else []
 
     groups = matching.group_props(day_props)
@@ -147,46 +166,49 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
     for disc in discrepancies[:limit]:
         any_prop = next(iter(disc.lines.values()))
         matchup = next((p.opponent for p in disc.lines.values() if p.opponent), "")
-        pp = disc.lines.get("prizepicks")
-        ud = disc.lines.get("underdog")
-        pp_open = (
-            openings.get((pp.player_key, pp.stat_key, pp.map_range or "full", "prizepicks"))
-            if pp else None
-        )
-        ud_open = (
-            openings.get((ud.player_key, ud.stat_key, ud.map_range or "full", "underdog"))
-            if ud else None
-        )
+        book_cells = {}
+        open_lines = []
+        for src in BOOKS:
+            prop = disc.lines.get(src)
+            opening = None
+            if prop:
+                opening = openings.get(
+                    (prop.player_key, prop.stat_key, prop.map_range or "full", src)
+                )
+                if opening:
+                    open_lines.append(opening.line)
+            book_cells[src] = line_cell(
+                prop.line if prop else None,
+                opening.line if opening else None,
+            )
         open_spread = None
-        if pp_open and ud_open:
-            open_spread = round(abs(pp_open.line - ud_open.line), 1)
+        if len(open_lines) >= 2:
+            open_spread = round(max(open_lines) - min(open_lines), 1)
         spread_delta = None if open_spread is None else round(disc.spread - open_spread, 1)
         team = disc.team or ""
         series = _series_payload(polymarket.match_series(matchup_keys(matchup, team), series_odds))
-        gaps.append(
-            {
-                "player": disc.player,
-                "player_key": any_prop.player_key,
-                "team": team,
-                "stat": format_stat(disc.stat, disc.map_range),
-                "stat_key": disc.stat,
-                "map": disc.map_range or "full",
-                "matchup": matchup,
-                "start": fmt_time(any_prop.starts_at),
-                "starts_at": any_prop.starts_at,
-                "spread": round(disc.spread, 1),
-                "spread_delta": spread_delta,
-                "group": _group_key(matchup, team, any_prop.starts_at),
-                "series": series,
-                "prizepicks": line_cell(pp.line if pp else None, pp_open.line if pp_open else None),
-                "underdog": line_cell(ud.line if ud else None, ud_open.line if ud_open else None),
-            }
-        )
+        row = {
+            "player": disc.player,
+            "player_key": any_prop.player_key,
+            "team": team,
+            "stat": format_stat(disc.stat, disc.map_range),
+            "stat_key": disc.stat,
+            "map": disc.map_range or "full",
+            "matchup": matchup,
+            "start": fmt_time(any_prop.starts_at),
+            "starts_at": any_prop.starts_at,
+            "spread": round(disc.spread, 1),
+            "spread_delta": spread_delta,
+            "group": _group_key(matchup, team, any_prop.starts_at),
+            "series": series,
+        }
+        row.update(book_cells)
+        gaps.append(row)
 
     movers = []
     seen = set()
     for group in groups:
-        if "prizepicks" not in group or "underdog" not in group:
+        if len(group) < 2:
             continue
         any_prop = next(iter(group.values()))
         map_range = matching.preferred_map_range(group)
@@ -194,33 +216,46 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
         if key in seen:
             continue
         seen.add(key)
-        pp, ud = group["prizepicks"], group["underdog"]
-        pp_open = openings.get((*key, "prizepicks"))
-        ud_open = openings.get((*key, "underdog"))
-        pp_delta = None if not pp_open else round(pp.line - pp_open.line, 1)
-        ud_delta = None if not ud_open else round(ud.line - ud_open.line, 1)
-        mag = max(abs(pp_delta or 0), abs(ud_delta or 0))
+        book_cells = {}
+        deltas = []
+        open_lines = []
+        live_lines = []
+        for src in BOOKS:
+            prop = group.get(src)
+            opening = openings.get((*key, src)) if prop else None
+            book_cells[src] = line_cell(
+                prop.line if prop else None,
+                opening.line if opening else None,
+            )
+            if prop:
+                live_lines.append(prop.line)
+            if opening:
+                open_lines.append(opening.line)
+            if prop and opening:
+                deltas.append(abs(round(prop.line - opening.line, 1)))
+        mag = max(deltas) if deltas else 0
         if mag < 0.05:
             continue
         open_spread = (
-            round(abs(pp_open.line - ud_open.line), 1) if pp_open and ud_open else None
+            round(max(open_lines) - min(open_lines), 1) if len(open_lines) >= 2 else None
         )
-        movers.append(
-            {
-                "player": any_prop.player_raw,
-                "player_key": any_prop.player_key,
-                "team": any_prop.team or "",
-                "stat": format_stat(any_prop.stat_key, map_range),
-                "stat_key": any_prop.stat_key,
-                "map": map_range or "full",
-                "matchup": next((p.opponent for p in group.values() if p.opponent), ""),
-                "max_move": mag,
-                "spread_was": open_spread,
-                "spread_now": round(abs(pp.line - ud.line), 1),
-                "prizepicks": line_cell(pp.line, pp_open.line if pp_open else None),
-                "underdog": line_cell(ud.line, ud_open.line if ud_open else None),
-            }
+        spread_now = (
+            round(max(live_lines) - min(live_lines), 1) if len(live_lines) >= 2 else None
         )
+        mover = {
+            "player": any_prop.player_raw,
+            "player_key": any_prop.player_key,
+            "team": any_prop.team or "",
+            "stat": format_stat(any_prop.stat_key, map_range),
+            "stat_key": any_prop.stat_key,
+            "map": map_range or "full",
+            "matchup": next((p.opponent for p in group.values() if p.opponent), ""),
+            "max_move": mag,
+            "spread_was": open_spread,
+            "spread_now": spread_now,
+        }
+        mover.update(book_cells)
+        movers.append(mover)
     movers.sort(key=lambda m: (-m["max_move"], m["player"].lower()))
     movers = movers[:40]
 
@@ -265,11 +300,42 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
     for match in matches:
         match.pop("starts_at", None)
 
-    pp_n = sum(1 for p in day_props if p.source == "prizepicks")
-    ud_n = sum(1 for p in day_props if p.source == "underdog")
+    source_counts = {
+        src: sum(1 for p in day_props if p.source == src) for src in BOOKS
+    }
     closed = sum(
-        1 for m in movers if (m["spread_was"] or 0) >= 0.5 and m["spread_now"] < 0.05
+        1 for m in movers
+        if (m["spread_was"] or 0) >= 0.5 and (m["spread_now"] or 0) < 0.05
     )
+    ingest_state = {}
+    try:
+        ingest_state = ingest.status()
+    except Exception:
+        ingest_state = {}
+    last_counts = ingest_state.get("last_counts") or {}
+    source_errors = {
+        name: text
+        for name, text in last_counts.items()
+        if name in BOOKS and isinstance(text, str) and text.startswith("error")
+    }
+    live_books = sum(1 for src in BOOKS if source_counts.get(src))
+    message = None
+    if source_errors:
+        if set(source_errors) <= {"betr"} and live_books >= 2:
+            message = (
+                "Betr CS2 lines need a Betr login (BETR_ACCESS_TOKEN or "
+                "BETR_USERNAME / BETR_PASSWORD). PrizePicks and Underdog are live."
+            )
+        else:
+            bits = [f"{name}: {err}" for name, err in source_errors.items()]
+            message = "Some books failed — " + " · ".join(bits)
+    elif live_books < 2:
+        message = (
+            "Need lines from at least two books to show gaps. "
+            f"PrizePicks {source_counts.get('prizepicks', 0)}, "
+            f"Underdog {source_counts.get('underdog', 0)}, "
+            f"Betr {source_counts.get('betr', 0)}."
+        )
 
     bdl_n = 0
     try:
@@ -282,7 +348,7 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
 
     return {
         "ok": True,
-        "message": None,
+        "message": message,
         "date": chosen,
         "dates": dates,
         "threshold": threshold,
@@ -291,13 +357,16 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
             "gaps": len(discrepancies),
             "movers": len(movers),
             "closed": closed,
-            "prizepicks": pp_n,
-            "underdog": ud_n,
+            "prizepicks": source_counts.get("prizepicks", 0),
+            "underdog": source_counts.get("underdog", 0),
+            "betr": source_counts.get("betr", 0),
             "max_spread": gaps[0]["spread"] if gaps else 0,
             "matches": len(matches),
             "series": sum(1 for m in matches if m.get("series")),
             "players": bdl_n,
         },
+        "source_counts": source_counts,
+        "source_errors": source_errors,
         "gaps": gaps,
         "movers": movers,
         "matches": matches,

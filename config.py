@@ -20,6 +20,19 @@ PRIZEPICKS_PER_PAGE = 250
 # The payload is large (~10MB+), so this timeout is higher than PrizePicks.
 UNDERDOG_TIMEOUT_SECONDS = int(os.environ.get("UNDERDOG_TIMEOUT_SECONDS", "90"))
 
+# --- Betr Picks ---
+# CS2 is league CSGO in Betr's GraphQL (lobby label is CS2).
+# Upcoming events usually need a Betr account token.
+BETR_CS2_LEAGUE = os.environ.get("BETR_CS2_LEAGUE", "CSGO")
+BETR_ACCESS_TOKEN = os.environ.get("BETR_ACCESS_TOKEN", "").strip()
+BETR_USERNAME = os.environ.get("BETR_USERNAME", "").strip()
+BETR_PASSWORD = os.environ.get("BETR_PASSWORD", "").strip()
+BETR_API_VERSION = os.environ.get("BETR_API_VERSION", "16.0")
+BETR_APP_VERSION = os.environ.get("BETR_APP_VERSION", "3.42.7")
+BETR_PROMOTIONS_API_VERSION = os.environ.get("BETR_PROMOTIONS_API_VERSION", "6.0")
+
+BOOKS = ("prizepicks", "underdog", "betr")
+
 # --- Chalkboard ---
 # Chalkboard does offer CS2 at major events, but there is no public board API
 # analogous to PrizePicks/Underdog. Keep the adapter stubbed until one exists.

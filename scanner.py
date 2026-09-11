@@ -21,11 +21,12 @@ import requests
 
 import config
 import matching
-from sources import prizepicks, underdog, chalkboard
+from sources import prizepicks, underdog, betr, chalkboard
 
 SOURCE_FETCHERS = {
     "prizepicks": prizepicks.fetch,
     "underdog": underdog.fetch,
+    "betr": betr.fetch,
     "chalkboard": chalkboard.fetch,
 }
 
@@ -99,8 +100,8 @@ def write_csv(discrepancies: list, path: str):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        "--sources", default="prizepicks,underdog",
-        help="Comma-separated list of sources to check (default: prizepicks,underdog)",
+        "--sources", default="prizepicks,underdog,betr",
+        help="Comma-separated list of sources to check (default: prizepicks,underdog,betr)",
     )
     parser.add_argument(
         "--threshold", type=float, default=config.DEFAULT_LINE_DIFF_THRESHOLD,

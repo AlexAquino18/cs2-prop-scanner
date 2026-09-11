@@ -6,7 +6,7 @@ import threading
 import requests
 
 import store
-from sources import chalkboard, prizepicks, underdog
+from sources import betr, chalkboard, prizepicks, underdog
 
 _LOCK = threading.Lock()
 _STATE = {
@@ -51,6 +51,7 @@ def run_ingest() -> dict:
         for name, fetcher in (
             ("prizepicks", prizepicks.fetch),
             ("underdog", underdog.fetch),
+            ("betr", betr.fetch),
             ("chalkboard", chalkboard.fetch),
         ):
             try:
