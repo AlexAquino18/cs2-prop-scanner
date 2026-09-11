@@ -337,15 +337,6 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
             f"Betr {source_counts.get('betr', 0)}."
         )
 
-    bdl_n = 0
-    try:
-        import statsdb as _statsdb
-
-        _statsdb.init_db()
-        bdl_n = _statsdb.counts().get("players") or 0
-    except Exception:
-        bdl_n = 0
-
     return {
         "ok": True,
         "message": message,
@@ -363,7 +354,6 @@ def build_dashboard(date: str | None = None, threshold: float = 0.5, limit: int 
             "max_spread": gaps[0]["spread"] if gaps else 0,
             "matches": len(matches),
             "series": sum(1 for m in matches if m.get("series")),
-            "players": bdl_n,
         },
         "source_counts": source_counts,
         "source_errors": source_errors,

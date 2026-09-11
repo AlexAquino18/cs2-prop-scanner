@@ -12,8 +12,6 @@ from fastapi.staticfiles import StaticFiles
 import board
 import config
 import ingest
-import profiles
-import statsdb
 import store
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -23,15 +21,6 @@ REFRESH_MINUTES = 15
 def _safe_ingest() -> None:
     try:
         ingest.run_ingest()
-    except Exception:
-        pass
-
-
-def _safe_daily_stats() -> None:
-    try:
-        import bdl_sync
-
-        bdl_sync.daily_refresh()
     except Exception:
         pass
 
@@ -52,24 +41,10 @@ async def lifespan(app: FastAPI):
             max_instances=1,
             coalesce=True,
         )
-        scheduler.add_job(
-            _safe_daily_stats,
-            "interval",
-            hours=24,
-            id="bdl_daily",
-            max_instances=1,
-            coalesce=True,
-        )
         scheduler.start()
     except Exception:
         scheduler = None
     threading.Thread(target=_safe_ingest, daemon=True).start()
-    try:
-        import bdl_sync
-
-        bdl_sync.start_background()
-    except Exception:
-        pass
     yield
     if scheduler:
         scheduler.shutdown(wait=False)
@@ -134,27 +109,6 @@ def api_board(
     threshold: float = Query(default=0.5),
 ):
     return board.build_dashboard(date=date, threshold=threshold)
-
-
-@app.get("/api/player")
-def api_player(
-    name: str = Query(...),
-    stat: str = Query(default="kills"),
-    map: str = Query(default="1-2"),
-    line: float | None = Query(default=None),
-    team: str | None = Query(default=None),
-):
-    return profiles.player_profile(name, stat_key=stat, map_range=map, line=line, team=team)
-
-
-@app.get("/api/players")
-def api_players(q: str = Query(default="")):
-    return {"ok": True, "players": profiles.lookup_players(q)}
-
-
-@app.get("/api/matchup")
-def api_matchup(label: str = Query(...), sides: str | None = Query(default=None)):
-    return profiles.matchup_profile(label, sides_text=sides)
 
 
 @app.post("/api/refresh")

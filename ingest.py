@@ -20,13 +20,6 @@ _STATE = {
 def status() -> dict:
     latest = store.latest_snapshot_ids(1)
     created = latest[0][1] if latest else None
-    bdl = {}
-    try:
-        import bdl_sync
-
-        bdl = bdl_sync.status()
-    except Exception:
-        bdl = {}
     return {
         "running": _STATE["running"],
         "error": _STATE["error"],
@@ -34,7 +27,6 @@ def status() -> dict:
         "last_snapshot_at": created,
         "last_counts": _STATE["last_counts"],
         "has_data": bool(latest),
-        "bdl": bdl,
     }
 
 
@@ -62,15 +54,6 @@ def run_ingest() -> dict:
             counts[name] = len(batch)
             props.extend(batch)
         snapshot_id = store.save_snapshot(props)
-        try:
-            import bdl_sync
-
-            names = list({p.player_raw for p in props if p.player_raw})
-            teams = list({p.team for p in props if p.team})
-            bdl_sync.schedule_board(names, teams)
-            counts["bdl"] = bdl_sync.status()
-        except Exception as exc:
-            counts["bdl"] = f"error: {exc}"
         try:
             from sources import polymarket
 
